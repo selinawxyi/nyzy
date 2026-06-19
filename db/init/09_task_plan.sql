@@ -1,0 +1,3 @@
+SET NAMES utf8mb4;
+USE nyzy;
+ALTER TABLE abandon_task ADD COLUMN plan VARCHAR(500) DEFAULT NULL COMMENT '治理方案' AFTER standard;
