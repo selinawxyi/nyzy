@@ -27,18 +27,18 @@ export const providers = {
       '矢量路网': [
         {
           url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-          options: { maxZoom: 18, subdomains: ['1', '2', '3', '4'], attribution: '© 高德地图 AutoNavi' }
+          options: { maxZoom: 18, maxNativeZoom: 18, subdomains: ['1', '2', '3', '4'], attribution: '© 高德地图 AutoNavi', keepBuffer: 6, updateWhenZooming: false }
         }
       ],
       '卫星影像': [
         {
           url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
-          options: { maxZoom: 18, subdomains: ['1', '2', '3', '4'], attribution: '© 高德地图 AutoNavi' }
+          options: { maxZoom: 18, maxNativeZoom: 18, subdomains: ['1', '2', '3', '4'], attribution: '© 高德地图 AutoNavi', keepBuffer: 6, updateWhenZooming: false }
         },
         // 卫星图上叠加路名注记
         {
           url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}',
-          options: { maxZoom: 18, subdomains: ['1', '2', '3', '4'], opacity: 1 }
+          options: { maxZoom: 18, maxNativeZoom: 18, subdomains: ['1', '2', '3', '4'], opacity: 1, keepBuffer: 6, updateWhenZooming: false }
         }
       ]
     },
