@@ -66,10 +66,27 @@
           <el-col :span="12"><el-form-item label="地块用途"><el-select v-model="form.landUse" filterable allow-create style="width:100%"><el-option v-for="o in landUseOptions" :key="o" :label="o" :value="o" /></el-select></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="承包起始"><el-date-picker v-model="form.contractStart" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="承包终止"><el-date-picker v-model="form.contractEnd" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
-          <el-col :span="6"><el-form-item label="东至"><el-input v-model="form.boundEast" /></el-form-item></el-col>
-          <el-col :span="6"><el-form-item label="南至" label-width="50px"><el-input v-model="form.boundSouth" /></el-form-item></el-col>
-          <el-col :span="6"><el-form-item label="西至" label-width="50px"><el-input v-model="form.boundWest" /></el-form-item></el-col>
-          <el-col :span="6"><el-form-item label="北至" label-width="50px"><el-input v-model="form.boundNorth" /></el-form-item></el-col>
+          <el-col :span="24" v-if="form.id">
+            <el-form-item label="地块边界">
+              <span v-if="form.boundEast || form.boundSouth || form.boundWest || form.boundNorth">
+                东至 {{ form.boundEast || '-' }} · 南至 {{ form.boundSouth || '-' }} · 西至 {{ form.boundWest || '-' }} · 北至 {{ form.boundNorth || '-' }}
+              </span>
+              <span v-else class="muted">未绘制边界</span>
+              <el-button link type="primary" size="small" @click="goEditBoundary">去编辑边界 →</el-button>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24" v-else>
+            <el-form-item label="地块边界(可选)">
+              <div class="boundary-draw">
+                <MapView ref="boundaryMapRef" draw-mode="shape" height="280px" @draw-created="onBoundaryDrawn" />
+                <div class="boundary-actions">
+                  <el-button size="small" @click="clearBoundary">重画</el-button>
+                  <span v-if="boundaryFeedback" class="boundary-feedback">{{ boundaryFeedback }}</span>
+                  <span v-else class="muted">不画也可以提交，之后可在详情页补画边界</span>
+                </div>
+              </div>
+            </el-form-item>
+          </el-col>
           <el-col :span="24"><el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item></el-col>
         </el-row>
       </el-form>
@@ -234,7 +251,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Download } from '@element-plus/icons-vue'
@@ -284,7 +301,7 @@ const formRef = ref()
 const blankForm = () => ({
   id: null, parcelCode: '', name: '', regionId: null, regionPath: '', contractorName: '', contractorCode: '',
   area: null, landUse: '基本农田', contractStart: '', contractEnd: '',
-  boundEast: '', boundSouth: '', boundWest: '', boundNorth: '', remark: '',
+  boundEast: '', boundSouth: '', boundWest: '', boundNorth: '', boundary: '', remark: '',
   _origCode: '', _origContractorCode: ''
 })
 const form = reactive(blankForm())
@@ -295,9 +312,50 @@ const formRules = {
 const openForm = (row) => {
   Object.assign(form, blankForm())
   if (row) Object.assign(form, { ...row, _origCode: row.parcelCode, _origContractorCode: row.contractorCode })
+  boundaryFeedback.value = ''
   formVisible.value = true
+  nextTick(() => boundaryMapRef.value?.clearDrawn())
 }
-const resetForm = () => formRef.value?.clearValidate()
+const resetForm = () => {
+  formRef.value?.clearValidate()
+  boundaryMapRef.value?.clearDrawn()
+  boundaryFeedback.value = ''
+}
+
+// ---- 新增地块: 表单内嵌地图圈画边界 ----
+const boundaryMapRef = ref()
+const boundaryFeedback = ref('')
+/** 圆心+半径(米) 近似转为多边形点环(32边), 与 SupportList.vue 服务范围绘制保持同样的近似算法 */
+const circleToPolygonPoints = (center, radiusMeters, segments = 32) => {
+  const [lng, lat] = center
+  const dLat = radiusMeters / 111320
+  const dLng = radiusMeters / (111320 * Math.cos((lat * Math.PI) / 180))
+  const points = []
+  for (let i = 0; i < segments; i++) {
+    const angle = (2 * Math.PI * i) / segments
+    points.push([lng + dLng * Math.cos(angle), lat + dLat * Math.sin(angle)])
+  }
+  return points
+}
+const onBoundaryDrawn = (shape) => {
+  const points = shape.type === 'circle' ? circleToPolygonPoints(shape.center, shape.radius) : shape.points
+  const coords = [...points, points[0]]
+  form.boundary = JSON.stringify({ type: 'Polygon', coordinates: [coords] })
+  const area = polygonAreaMu(points)
+  form.area = Number(area.toFixed(2))
+  boundaryFeedback.value = `已绘制边界，面积约 ${area.toFixed(2)} 亩`
+}
+const clearBoundary = () => {
+  boundaryMapRef.value?.clearDrawn()
+  form.boundary = ''
+  boundaryFeedback.value = ''
+}
+const goEditBoundary = async () => {
+  const id = form.id
+  formVisible.value = false
+  await openDetail({ id })
+  toggleGeoMode('edit-polygon')
+}
 const onRegionChange = ({ regionId, regionPath }) => {
   form.regionId = regionId
   if (regionPath) form.regionPath = regionPath
@@ -502,4 +560,7 @@ onMounted(() => {
 .anno-tags { margin-top: 4px; }
 .diff { color: #f56c6c; font-weight: 600; }
 .live-stats { font-size: 13px; color: #606266; background: #fdf6ec; padding: 6px 10px; border-radius: 4px; margin: 6px 0; }
+.boundary-draw { width: 100%; }
+.boundary-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.boundary-feedback { font-size: 13px; color: #2e9e5b; }
 </style>

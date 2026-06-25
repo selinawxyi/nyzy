@@ -77,6 +77,11 @@ public class ParcelService {
         if (!StringUtils.hasText(p.getName())) throw new ApiException("地块名称不能为空");
         if (exists(p.getParcelCode(), null)) throw new ApiException("地块编码已存在: " + p.getParcelCode());
         p.setDeleted(0);
+        if (StringUtils.hasText(p.getBoundary())) {
+            org.locationtech.jts.geom.Polygon poly = com.nyzy.gis.GeoUtil.parsePolygon(p.getBoundary());
+            com.nyzy.gis.GeoUtil.validateOrThrow(poly);
+            fillGeometryFields(p, poly);
+        }
         mapper.insert(p);
         recordHistory(p, "CREATE", "初始建档", "新增确权地块");
         return p.getId();
