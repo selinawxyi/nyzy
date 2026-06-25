@@ -113,6 +113,9 @@ const navItems = [
 
 // 每个导航分组的二级菜单 (route 为空表示规划中)
 const navGroups = {
+  home: { label: '首页', icon: HomeFilled, children: [
+    { label: '首页', route: 'home' }
+  ] },
   map: { label: '一张图', icon: Location, children: [
     { label: '农业资源一张图', route: 'map' }
   ] },

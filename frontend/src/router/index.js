@@ -5,8 +5,9 @@ const routes = [
   {
     path: '/',
     component: () => import('../layout/MainLayout.vue'),
-    redirect: '/abandon',
+    redirect: '/home',
     children: [
+      { path: 'home', name: 'home', component: () => import('../views/Dashboard.vue'), meta: { title: '首页', nav: 'home' } },
       { path: 'abandon', name: 'abandon', component: () => import('../views/abandon/AbandonList.vue'), meta: { title: '撂荒管理', nav: 'abandon' } },
       { path: 'planting', name: 'planting', component: () => import('../views/cultivation/PlantingList.vue'), meta: { title: '种植记录', nav: 'plant' } },
       { path: 'quality', name: 'quality', component: () => import('../views/cultivation/QualityList.vue'), meta: { title: '耕地质量', nav: 'quality' } },
