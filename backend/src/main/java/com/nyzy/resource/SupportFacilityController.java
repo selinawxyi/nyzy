@@ -49,4 +49,29 @@ public class SupportFacilityController {
         service.delete(id, reason);
         return Result.ok();
     }
+
+    @PutMapping("/facilities/{id}/service-area")
+    public Result<SupportFacility> updateServiceArea(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+        return Result.ok(service.updateServiceArea(id, body.get("serviceArea")));
+    }
+
+    public static class BatchRequest {
+        public java.util.List<Long> ids;
+        public SupportFacility updates;
+    }
+
+    @PostMapping("/facilities/batch")
+    public Result<Integer> batch(@RequestBody BatchRequest req) {
+        return Result.ok(service.batchUpdate(req.ids, req.updates));
+    }
+
+    public static class BatchDeleteRequest {
+        public java.util.List<Long> ids;
+        public String reason;
+    }
+
+    @PostMapping("/facilities/batch-delete")
+    public Result<Integer> batchDelete(@RequestBody BatchDeleteRequest req) {
+        return Result.ok(service.batchDelete(req.ids, req.reason));
+    }
 }

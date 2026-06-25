@@ -158,7 +158,9 @@ const structurePie = computed(() => {
     series: [{
       type: 'pie', radius: ['40%', '65%'], center: ['50%', '45%'],
       data: overview.structure.map((s) => ({ name: s.crop, value: s.area, itemStyle: { color: cropColor[s.crop] } })),
-      label: { formatter: '{b}\n{d}%' }
+      label: { formatter: '{b}\n{d}%', fontSize: 11 },
+      labelLine: { length: 8, length2: 6 },
+      labelLayout: { hideOverlap: true }
     }]
   }
 })
@@ -170,8 +172,11 @@ const landUsePie = computed(() => {
     tooltip: { trigger: 'item', formatter: '{b}: {c} 块' },
     legend: { bottom: 0 },
     series: [{
-      type: 'pie', radius: '60%', center: ['50%', '45%'],
-      data: landUseRows.value.map((r) => ({ name: r.type, value: r.count, itemStyle: { color: colors[r.type] } }))
+      type: 'pie', radius: '55%', center: ['50%', '42%'],
+      data: landUseRows.value.map((r) => ({ name: r.type, value: r.count, itemStyle: { color: colors[r.type] } })),
+      label: { formatter: '{b}\n{d}%', fontSize: 11 },
+      labelLine: { length: 8, length2: 6 },
+      labelLayout: { hideOverlap: true }
     }]
   }
 })
@@ -256,7 +261,9 @@ const evolutionPie = computed(() => {
     series: [{
       type: 'pie', radius: ['35%', '62%'], center: ['50%', '45%'],
       data: items.map((s) => ({ name: s.crop, value: s.area, itemStyle: { color: cropColor[s.crop] } })),
-      label: { formatter: '{b}\n{d}%' }
+      label: { formatter: '{b}\n{d}%', fontSize: 11 },
+      labelLine: { length: 8, length2: 6 },
+      labelLayout: { hideOverlap: true }
     }]
   }
 })

@@ -44,6 +44,22 @@
         <el-button type="primary" :loading="saving" @click="submitForm">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="transferVisible" title="转移设施后删除分类" width="440px">
+      <el-alert type="warning" :closable="false" show-icon style="margin-bottom:12px"
+        :title="`分类「${transferTarget?.name}」下还有设施未清空，请选择转移目标分类，转移完成后将自动删除该分类`" />
+      <el-form label-width="90px">
+        <el-form-item label="转移到">
+          <el-select v-model="transferToId" placeholder="请选择目标分类（二级分类）" style="width:100%">
+            <el-option v-for="o in transferOptions" :key="o.id" :label="o.name" :value="o.id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="transferVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitTransferDelete">确认转移并删除</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -112,7 +128,34 @@ const onDelete = async (row) => {
     await categoryApi.remove(row.id)
     ElMessage.success('已删除')
     load()
-  } catch (e) { /* cancel or blocked (error already toasted) */ }
+  } catch (e) {
+    if (e?.message?.includes('请先转移或删除')) openTransfer(row)
+    /* else: cancel or other error already toasted */
+  }
+}
+
+// ---------------- 转移设施后删除 ----------------
+const transferVisible = ref(false)
+const transferTarget = ref(null)
+const transferToId = ref(null)
+const transferOptions = ref([])
+const openTransfer = async (row) => {
+  transferTarget.value = row
+  transferToId.value = null
+  transferOptions.value = (await categoryApi.leaves()).filter((c) => c.id !== row.id)
+  transferVisible.value = true
+}
+const submitTransferDelete = async () => {
+  if (!transferToId.value) { ElMessage.error('请选择转移目标分类'); return }
+  saving.value = true
+  try {
+    await categoryApi.transferDelete(transferTarget.value.id, transferToId.value)
+    ElMessage.success('已转移设施并删除分类')
+    transferVisible.value = false
+    load()
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(load)

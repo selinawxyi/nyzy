@@ -43,4 +43,14 @@ public class FacilityCategoryController {
         service.delete(id);
         return Result.ok();
     }
+
+    public static class TransferDeleteRequest {
+        public Long transferToId;
+    }
+
+    @PostMapping("/{id}/transfer-delete")
+    public Result<Void> deleteWithTransfer(@PathVariable Long id, @RequestBody TransferDeleteRequest req) {
+        service.deleteWithTransfer(id, req.transferToId);
+        return Result.ok();
+    }
 }

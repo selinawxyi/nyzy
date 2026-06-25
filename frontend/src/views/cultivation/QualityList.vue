@@ -114,6 +114,7 @@ import { qualityApi, exportApi } from '../../api'
 import ImportButton from '../../components/ImportButton.vue'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
 import { soilTypeOptions, obstacleOptions, gradeTagType } from '../../constants/dict'
+import { confirmBatchUpdate } from '../../utils/batchPreview'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -155,14 +156,21 @@ const openBatch = () => {
   Object.assign(batchForm, { evalYear: '', grade: null, soilType: '', obstacle: '', org: '' })
   batchVisible.value = true
 }
+const batchFieldLabels = { evalYear: '评价年度', grade: '地力等级', soilType: '土壤类型', obstacle: '障碍因素', org: '评价机构' }
 const submitBatch = async () => {
+  const updates = {
+    evalYear: batchForm.evalYear ? Number(batchForm.evalYear) : null,
+    grade: batchForm.grade, soilType: batchForm.soilType || null,
+    obstacle: batchForm.obstacle || null, org: batchForm.org || null
+  }
+  try {
+    await confirmBatchUpdate(selected.value.length, updates, batchFieldLabels)
+  } catch (e) {
+    if (e?.message) ElMessage.error(e.message)
+    return
+  }
   saving.value = true
   try {
-    const updates = {
-      evalYear: batchForm.evalYear ? Number(batchForm.evalYear) : null,
-      grade: batchForm.grade, soilType: batchForm.soilType || null,
-      obstacle: batchForm.obstacle || null, org: batchForm.org || null
-    }
     const n = await qualityApi.batch(selected.value.map((r) => r.id), updates)
     ElMessage.success(`已修改 ${n} 条`)
     batchVisible.value = false

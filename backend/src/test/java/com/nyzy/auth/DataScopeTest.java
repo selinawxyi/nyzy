@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -66,7 +67,7 @@ class DataScopeTest {
         stubTree();
         UserContext.set(new UserContext.CurrentUser(3L, "gm", "gridman", 110L));
         Set<Long> scope = dataScope.currentScope();
-        assertEquals(Set.of(110L), scope, "村级网格员只应看到本村");
+        assertEquals(Collections.singleton(110L), scope, "村级网格员只应看到本村");
     }
 
     @Test

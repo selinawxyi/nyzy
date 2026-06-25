@@ -52,6 +52,36 @@ public class ParcelController {
         return Result.ok();
     }
 
+    public static class BatchRequest {
+        public List<Long> ids;
+        public LandParcel updates;
+        public String reason;
+    }
+
+    @PostMapping("/parcels/batch")
+    public Result<Integer> batch(@RequestBody BatchRequest req) {
+        return Result.ok(service.batchUpdate(req.ids, req.updates, req.reason));
+    }
+
+    // ---- 几何编辑(A1.4) ----
+    @PutMapping("/parcels/{id}/geometry")
+    public Result<Void> updateGeometry(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        service.updateGeometry(id, body.get("boundary"), body.get("reason"));
+        return Result.ok();
+    }
+
+    @PostMapping("/parcels/{id}/split")
+    public Result<Long> split(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        return Result.ok(service.split(id, body.get("line"), body.get("newCode"), body.get("reason")));
+    }
+
+    @PostMapping("/parcels/merge")
+    public Result<Long> merge(@RequestBody Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<Long> ids = ((List<Number>) body.get("ids")).stream().map(Number::longValue).collect(java.util.stream.Collectors.toList());
+        return Result.ok(service.merge(ids, (String) body.get("newCode"), (String) body.get("reason")));
+    }
+
     // ---- 版本历史 ----
     @GetMapping("/parcels/{id}/history")
     public Result<List<LandParcelHistory>> history(@PathVariable Long id) {

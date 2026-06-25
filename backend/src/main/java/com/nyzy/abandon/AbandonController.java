@@ -31,6 +31,11 @@ public class AbandonController {
         return Result.ok(service.detail(id));
     }
 
+    @GetMapping("/stats")
+    public Result<Map<String, Object>> stats(@RequestParam(required = false) Integer year) {
+        return Result.ok(service.stats(year));
+    }
+
     @PostMapping("/parcels")
     public Result<Long> create(@RequestBody AbandonParcel parcel) {
         return Result.ok(service.create(parcel));
@@ -65,6 +70,16 @@ public class AbandonController {
     public Result<Long> createTask(@PathVariable Long id, @RequestBody AbandonTask task) {
         task.setAbandonId(id);
         return Result.ok(service.createTask(task));
+    }
+
+    public static class BatchTaskRequest {
+        public java.util.List<Long> abandonIds;
+        public AbandonTask template;
+    }
+
+    @PostMapping("/parcels/batch-tasks")
+    public Result<java.util.List<Long>> batchCreateTasks(@RequestBody BatchTaskRequest req) {
+        return Result.ok(service.batchCreateTasks(req.abandonIds, req.template));
     }
 
     // ---- 治理任务办理 / 验收 ----

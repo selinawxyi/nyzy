@@ -1,9 +1,12 @@
 package com.nyzy.analysis;
 
+import com.nyzy.abandon.entity.AbandonParcel;
 import com.nyzy.abandon.mapper.AbandonParcelMapper;
 import com.nyzy.cultivation.entity.PlantingRecord;
 import com.nyzy.cultivation.mapper.LandQualityMapper;
 import com.nyzy.cultivation.mapper.PlantingRecordMapper;
+import com.nyzy.land.entity.LandParcel;
+import com.nyzy.land.mapper.LandParcelMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -20,8 +23,17 @@ import static org.mockito.Mockito.when;
 class AnalysisServiceTest {
 
     private final PlantingRecordMapper plantingMapper = Mockito.mock(PlantingRecordMapper.class);
+    private final AbandonParcelMapper abandonMapper = Mockito.mock(AbandonParcelMapper.class);
+    private final LandParcelMapper parcelMapper = Mockito.mock(LandParcelMapper.class);
     private final AnalysisService service = new AnalysisService(
-            plantingMapper, Mockito.mock(AbandonParcelMapper.class), Mockito.mock(LandQualityMapper.class));
+            plantingMapper, abandonMapper, Mockito.mock(LandQualityMapper.class), parcelMapper);
+
+    private LandParcel parcel(String code, String landUse) {
+        LandParcel p = new LandParcel();
+        p.setParcelCode(code);
+        p.setLandUse(landUse);
+        return p;
+    }
 
     private PlantingRecord rec(String code, int year, String crop, String region, double area) {
         PlantingRecord r = new PlantingRecord();
@@ -82,6 +94,28 @@ class AnalysisServiceTest {
         Map<?, ?> link = (Map<?, ?>) links.get(0);
         assertEquals("2021·水稻", link.get("source"));
         assertEquals("2024·大豆", link.get("target"));
+    }
+
+    @Test
+    void landUse_classifiesCultivatedAbandonedIdleAndNonFarm() {
+        // P1 在耕, P2 撂荒, P3 用途已转为非农业用地, P4 既不在耕也未登记撂荒 -> 季节性闲置
+        when(plantingMapper.selectList(any())).thenReturn(Arrays.asList(rec("P1", 2024, "水稻", "省/州/市/镇/村", 20)));
+        AbandonParcel ab = new AbandonParcel();
+        ab.setParcelCode("P2");
+        ab.setGovernStatus("UNGOVERNED");
+        when(abandonMapper.selectList(any())).thenReturn(Arrays.asList(ab));
+        when(parcelMapper.selectList(any())).thenReturn(Arrays.asList(
+                parcel("P1", "基本农田"), parcel("P2", "一般耕地"),
+                parcel("P3", "建设用地"), parcel("P4", "基本农田")));
+
+        List<Map<String, Object>> result = service.landUse(2024);
+        Map<String, Object> byType = new HashMap<>();
+        for (Map<String, Object> m : result) byType.put((String) m.get("type"), m.get("count"));
+
+        assertEquals(1L, byType.get("在耕"));
+        assertEquals(1L, byType.get("撂荒"));
+        assertEquals(1L, byType.get("季节性闲置"));
+        assertEquals(1L, byType.get("非农化"));
     }
 
     @Test

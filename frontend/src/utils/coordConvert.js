@@ -67,29 +67,36 @@ export function gcj02ToWgs84(lng, lat) {
 export function convertGeoJsonToGcj02(geojson) {
   if (!geojson) return geojson
   const obj = typeof geojson === 'string' ? JSON.parse(geojson) : geojson
-  return deepConvert(obj)
+  return deepConvert(obj, wgs84ToGcj02)
 }
 
-function deepConvert(obj) {
+/** 深度转换 GeoJSON 坐标（GCJ-02 → WGS-84）, 用于把地图上画的图形转回数据库坐标系 */
+export function convertGeoJsonToWgs84(geojson) {
+  if (!geojson) return geojson
+  const obj = typeof geojson === 'string' ? JSON.parse(geojson) : geojson
+  return deepConvert(obj, gcj02ToWgs84)
+}
+
+function deepConvert(obj, converter) {
   if (!obj) return obj
   switch (obj.type) {
     case 'FeatureCollection':
-      return { ...obj, features: obj.features.map(deepConvert) }
+      return { ...obj, features: obj.features.map((f) => deepConvert(f, converter)) }
     case 'Feature':
-      return { ...obj, geometry: deepConvert(obj.geometry) }
+      return { ...obj, geometry: deepConvert(obj.geometry, converter) }
     case 'Point':
-      return { ...obj, coordinates: convertCoord(obj.coordinates) }
+      return { ...obj, coordinates: convertCoord(obj.coordinates, converter) }
     case 'MultiPoint':
     case 'LineString':
-      return { ...obj, coordinates: obj.coordinates.map(convertCoord) }
+      return { ...obj, coordinates: obj.coordinates.map((c) => convertCoord(c, converter)) }
     case 'MultiLineString':
     case 'Polygon':
-      return { ...obj, coordinates: obj.coordinates.map((ring) => ring.map(convertCoord)) }
+      return { ...obj, coordinates: obj.coordinates.map((ring) => ring.map((c) => convertCoord(c, converter))) }
     case 'MultiPolygon':
       return {
         ...obj,
         coordinates: obj.coordinates.map((poly) =>
-          poly.map((ring) => ring.map(convertCoord))
+          poly.map((ring) => ring.map((c) => convertCoord(c, converter)))
         )
       }
     default:
@@ -97,7 +104,7 @@ function deepConvert(obj) {
   }
 }
 
-function convertCoord([lng, lat]) {
-  const [gLng, gLat] = wgs84ToGcj02(lng, lat)
-  return [gLng, gLat]
+function convertCoord([lng, lat], converter) {
+  const [cLng, cLat] = converter(lng, lat)
+  return [cLng, cLat]
 }

@@ -13,13 +13,16 @@
         <el-button type="primary" :icon="Search" @click="onSearch">搜索</el-button>
         <el-button :icon="Download" @click="onExport">导出 Excel</el-button>
         <ImportButton type="planting" template-name="种植数据导入模板.xlsx" @done="load" />
+        <el-button :disabled="!selected.length" @click="openBatch">批量修改{{ selected.length ? `(${selected.length})` : '' }}</el-button>
+        <el-button :disabled="!selected.length" type="danger" plain @click="onBatchDelete">批量删除{{ selected.length ? `(${selected.length})` : '' }}</el-button>
         <div class="flex-spacer" />
         <el-button type="primary" :icon="Plus" @click="openForm()">新增种植记录</el-button>
       </div>
     </el-card>
 
     <el-card shadow="never" class="table-card">
-      <el-table :data="rows" v-loading="loading" stripe>
+      <el-table :data="rows" v-loading="loading" stripe @selection-change="onSelect">
+        <el-table-column type="selection" width="46" />
         <el-table-column prop="parcelCode" label="地块编码" width="120" />
         <el-table-column label="地块名称" min-width="150">
           <template #default="{ row }">
@@ -65,6 +68,20 @@
           @current-change="onPage" @size-change="onSize" />
       </div>
     </el-card>
+
+    <el-dialog v-model="batchVisible" title="批量修改种植记录" width="440px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
+        :title="`将对选中的 ${selected.length} 条记录统一修改以下字段（留空不改）`" />
+      <el-form :model="batchForm" label-width="90px">
+        <el-form-item label="数据来源"><el-select v-model="batchForm.dataSource" clearable style="width:100%"><el-option v-for="o in plantingSourceOptions" :key="o.value" :label="o.label" :value="o.value" /></el-select></el-form-item>
+        <el-form-item label="填报人"><el-input v-model="batchForm.reporter" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="batchForm.remark" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitBatch">确定</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 新增/编辑 -->
     <el-dialog v-model="formVisible" :title="form.id ? '编辑种植记录' : '新增种植记录'" width="640px" @closed="resetForm">
@@ -147,6 +164,7 @@ import {
   seasonDict, seasonOptions, plantingSourceDict, plantingSourceOptions,
   plantingStatusDict, cropOptions
 } from '../../constants/dict'
+import { confirmBatchUpdate } from '../../utils/batchPreview'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -235,6 +253,50 @@ const onDelete = async (row) => {
     )
     await plantingApi.remove(row.id, value)
     ElMessage.success('已删除')
+    load()
+  } catch (e) { /* cancel */ }
+}
+
+// ---------------- 批量修改 / 批量删除 ----------------
+const selected = ref([])
+const onSelect = (rows) => { selected.value = rows }
+const batchVisible = ref(false)
+const batchForm = reactive({ dataSource: '', reporter: '', remark: '' })
+const openBatch = () => {
+  Object.assign(batchForm, { dataSource: '', reporter: '', remark: '' })
+  batchVisible.value = true
+}
+const batchFieldLabels = { dataSource: '数据来源', reporter: '填报人', remark: '备注' }
+const submitBatch = async () => {
+  const updates = {
+    dataSource: batchForm.dataSource || null, reporter: batchForm.reporter || null,
+    remark: batchForm.remark || null
+  }
+  try {
+    await confirmBatchUpdate(selected.value.length, updates, batchFieldLabels)
+  } catch (e) {
+    if (e?.message) ElMessage.error(e.message)
+    return
+  }
+  saving.value = true
+  try {
+    const n = await plantingApi.batch(selected.value.map((r) => r.id), updates)
+    ElMessage.success(`已修改 ${n} 条记录`)
+    batchVisible.value = false
+    load()
+  } finally {
+    saving.value = false
+  }
+}
+const onBatchDelete = async () => {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将把选中的 ${selected.value.length} 条记录一并删除，请填写删除原因：`, '批量删除确认',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', inputType: 'textarea', type: 'warning',
+        inputValidator: (v) => (v && v.trim() ? true : '删除原因不能为空') })
+    const n = await plantingApi.batchDelete(selected.value.map((r) => r.id), value)
+    ElMessage.success(`已删除 ${n} 条记录`)
+    selected.value = []
     load()
   } catch (e) { /* cancel */ }
 }

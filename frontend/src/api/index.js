@@ -13,11 +13,13 @@ export const abandonApi = {
   changeStatus: (id, data) => request.post(`/abandon/parcels/${id}/status`, data),
   remove: (id, reason) => request.delete(`/abandon/parcels/${id}`, { params: { reason } }),
   addReason: (id, data) => request.post(`/abandon/parcels/${id}/reasons`, data),
+  stats: (year) => request.get('/abandon/stats', { params: { year } }),
   createTask: (id, data) => request.post(`/abandon/parcels/${id}/tasks`, data),
   taskProgress: (taskId, progress) => request.post(`/abandon/tasks/${taskId}/progress`, { progress }),
   taskAccept: (taskId, data) => request.post(`/abandon/tasks/${taskId}/accept`, data),
   taskPlan: (taskId, plan) => request.post(`/abandon/tasks/${taskId}/plan`, { plan }),
-  taskFeedback: (taskId, content) => request.post(`/abandon/tasks/${taskId}/feedback`, { content })
+  taskFeedback: (taskId, content) => request.post(`/abandon/tasks/${taskId}/feedback`, { content }),
+  batchCreateTasks: (abandonIds, template) => request.post('/abandon/parcels/batch-tasks', { abandonIds, template })
 }
 
 export const plantingApi = {
@@ -26,7 +28,9 @@ export const plantingApi = {
   create: (data) => request.post('/planting/records', data),
   update: (id, data) => request.put(`/planting/records/${id}`, data),
   markInvalid: (id) => request.post(`/planting/records/${id}/invalid`),
-  remove: (id, reason) => request.delete(`/planting/records/${id}`, { params: { reason } })
+  remove: (id, reason) => request.delete(`/planting/records/${id}`, { params: { reason } }),
+  batch: (ids, updates) => request.post('/planting/records/batch', { ids, updates }),
+  batchDelete: (ids, reason) => request.post('/planting/records/batch-delete', { ids, reason })
 }
 
 export const qualityApi = {
@@ -39,19 +43,29 @@ export const qualityApi = {
 
 export const waterApi = {
   page: (params) => request.get('/water/facilities', { params }),
+  get: (id) => request.get(`/water/facilities/${id}`),
   create: (data) => request.post('/water/facilities', data),
   update: (id, data) => request.put(`/water/facilities/${id}`, data),
   audit: (id, pass) => request.post(`/water/facilities/${id}/audit`, null, { params: { pass } }),
   remove: (id, reason) => request.delete(`/water/facilities/${id}`, { params: { reason } }),
-  batch: (ids, updates) => request.post('/water/facilities/batch', { ids, updates })
+  batch: (ids, updates) => request.post('/water/facilities/batch', { ids, updates }),
+  batchDelete: (ids, reason) => request.post('/water/facilities/batch-delete', { ids, reason })
 }
 
 export const supportApi = {
   page: (params) => request.get('/support/facilities', { params }),
+  get: (id) => request.get(`/support/facilities/${id}`),
   create: (data) => request.post('/support/facilities', data),
   update: (id, data) => request.put(`/support/facilities/${id}`, data),
   audit: (id, pass) => request.post(`/support/facilities/${id}/audit`, null, { params: { pass } }),
-  remove: (id, reason) => request.delete(`/support/facilities/${id}`, { params: { reason } })
+  remove: (id, reason) => request.delete(`/support/facilities/${id}`, { params: { reason } }),
+  updateServiceArea: (id, serviceArea) => request.put(`/support/facilities/${id}/service-area`, { serviceArea }),
+  batch: (ids, updates) => request.post('/support/facilities/batch', { ids, updates }),
+  batchDelete: (ids, reason) => request.post('/support/facilities/batch-delete', { ids, reason })
+}
+
+export const gisApi = {
+  spatialQuery: (targetType, shape) => request.post('/gis/spatial-query', { targetType, shape })
 }
 
 export const categoryApi = {
@@ -59,7 +73,8 @@ export const categoryApi = {
   leaves: () => request.get('/facility-category/leaves'),
   create: (data) => request.post('/facility-category', data),
   update: (id, data) => request.put(`/facility-category/${id}`, data),
-  remove: (id) => request.delete(`/facility-category/${id}`)
+  remove: (id) => request.delete(`/facility-category/${id}`),
+  transferDelete: (id, transferToId) => request.post(`/facility-category/${id}/transfer-delete`, { transferToId })
 }
 
 export const mapApi = {
@@ -153,5 +168,9 @@ export const parcelApi = {
   compare: (v1, v2) => request.get('/parcel/history/compare', { params: { v1, v2 } }),
   annotations: (id) => request.get(`/parcel/parcels/${id}/annotations`),
   addAnnotation: (id, data) => request.post(`/parcel/parcels/${id}/annotations`, data),
-  removeAnnotation: (id) => request.delete(`/parcel/annotations/${id}`)
+  removeAnnotation: (id) => request.delete(`/parcel/annotations/${id}`),
+  batch: (ids, updates, reason) => request.post('/parcel/parcels/batch', { ids, updates, reason }),
+  updateGeometry: (id, boundary, reason) => request.put(`/parcel/parcels/${id}/geometry`, { boundary, reason }),
+  split: (id, line, newCode, reason) => request.post(`/parcel/parcels/${id}/split`, { line, newCode, reason }),
+  merge: (ids, newCode, reason) => request.post('/parcel/parcels/merge', { ids, newCode, reason })
 }

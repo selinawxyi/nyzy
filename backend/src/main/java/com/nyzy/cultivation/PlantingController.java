@@ -51,4 +51,24 @@ public class PlantingController {
         service.delete(id, reason);
         return Result.ok();
     }
+
+    public static class BatchRequest {
+        public List<Long> ids;
+        public PlantingRecord updates;
+    }
+
+    @PostMapping("/records/batch")
+    public Result<Integer> batch(@RequestBody BatchRequest req) {
+        return Result.ok(service.batchUpdate(req.ids, req.updates));
+    }
+
+    public static class BatchDeleteRequest {
+        public List<Long> ids;
+        public String reason;
+    }
+
+    @PostMapping("/records/batch-delete")
+    public Result<Integer> batchDelete(@RequestBody BatchDeleteRequest req) {
+        return Result.ok(service.batchDelete(req.ids, req.reason));
+    }
 }

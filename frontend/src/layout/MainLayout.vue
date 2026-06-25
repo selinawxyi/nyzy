@@ -27,7 +27,7 @@
         :key="sub.route || sub.label"
         class="submenu-item"
         :class="{ active: sub.route === route.name, disabled: !sub.route }"
-        @click="sub.route && router.push({ name: sub.route })"
+        @click="sub.route && router.push({ name: sub.route, query: sub.query || {} })"
       >
         {{ sub.label }}
       </div>
@@ -117,12 +117,11 @@ const navGroups = {
     { label: '农业资源一张图', route: 'map' }
   ] },
   parcel: { label: '土地资源', icon: Grid, children: [
-    { label: '确权地块', route: 'parcel' },
-    { label: '确权数据导入' }
+    { label: '确权地块', route: 'parcel' }
   ] },
   abandon: { label: '撂荒', icon: Warning, children: [
     { label: '撂荒管理', route: 'abandon' },
-    { label: '待审核列表' }
+    { label: '待审核列表', route: 'auditCenter', query: { bizType: 'abandon' } }
   ] },
   facility: { label: '农业资源', icon: OfficeBuilding, children: [
     { label: '水利设施', route: 'water' },
@@ -130,12 +129,11 @@ const navGroups = {
     { label: '设施分类', route: 'facilityCategory' }
   ] },
   plant: { label: '耕地利用', icon: Crop, children: [
-    { label: '种植记录', route: 'planting' },
-    { label: '种植数据导入' }
+    { label: '种植记录', route: 'planting' }
   ] },
   analysis: { label: '种植动态分析', icon: TrendCharts, children: [
     { label: '数据分析', route: 'analysis' },
-    { label: '数字化地图服务' }
+    { label: '数字化地图服务', route: 'spatialQuery' }
   ] },
   user: { label: '系统管理', icon: User, children: [
     { label: '待审核中心', route: 'auditCenter' },
@@ -144,8 +142,7 @@ const navGroups = {
     { label: '回收站', route: 'recycle' }
   ] },
   quality: { label: '耕地质量', icon: Medal, children: [
-    { label: '质量评定列表', route: 'quality' },
-    { label: '质量批量维护' }
+    { label: '质量评定列表', route: 'quality' }
   ] }
 }
 

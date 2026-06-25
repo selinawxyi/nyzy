@@ -11,6 +11,7 @@ import com.nyzy.cultivation.entity.PlantingRecord;
 import com.nyzy.cultivation.mapper.PlantingRecordMapper;
 import com.nyzy.land.entity.LandParcel;
 import com.nyzy.land.mapper.LandParcelMapper;
+import com.nyzy.system.AuditLogService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -28,12 +29,14 @@ public class PlantingService {
     private final PlantingRecordMapper mapper;
     private final LandParcelMapper parcelMapper;
     private final com.nyzy.auth.DataScope dataScope;
+    private final AuditLogService auditLogService;
 
     public PlantingService(PlantingRecordMapper mapper, LandParcelMapper parcelMapper,
-                           com.nyzy.auth.DataScope dataScope) {
+                           com.nyzy.auth.DataScope dataScope, AuditLogService auditLogService) {
         this.mapper = mapper;
         this.parcelMapper = parcelMapper;
         this.dataScope = dataScope;
+        this.auditLogService = auditLogService;
     }
 
     public PageResult<PlantingRecord> page(PlantingQuery q) {
@@ -70,6 +73,8 @@ public class PlantingService {
         r.setCreatedBy(UserContext.username());
         r.setDeleted(0);
         mapper.insert(r);
+        auditLogService.record("planting", r.getId(), "CREATE",
+                "新增种植记录 " + r.getParcelCode() + " " + r.getPlantYear() + "年" + r.getCrop());
         return r.getId();
     }
 
@@ -92,7 +97,10 @@ public class PlantingService {
         r.setDeletedAt(null);
         r.setCreatedBy(null);
         r.setCreatedAt(null);
-        mapper.updateById(r);
+        if (mapper.updateById(r) == 0) {
+            throw new ApiException(409, "数据已被他人修改, 请刷新后重试");
+        }
+        auditLogService.record("planting", r.getId(), "UPDATE", "修改种植记录");
     }
 
     /** 标记为无效 (文档推荐优先于删除, 不影响历史展示但排除统计) */
@@ -103,6 +111,7 @@ public class PlantingService {
         upd.setId(id);
         upd.setStatus("INVALID");
         mapper.updateById(upd);
+        auditLogService.record("planting", id, "STATUS", "标记为无效");
     }
 
     /** 软删除: 必填原因 */
@@ -117,6 +126,44 @@ public class PlantingService {
         meta.setDeletedAt(LocalDateTime.now());
         mapper.updateById(meta);
         mapper.deleteById(id);
+        auditLogService.record("planting", id, "DELETE", "软删除, 原因: " + reason);
+    }
+
+    /** 批量修改: 对选中记录统一改数据来源/填报人/备注(仅非空字段) */
+    @Transactional
+    public int batchUpdate(java.util.List<Long> ids, PlantingRecord u) {
+        if (ids == null || ids.isEmpty()) throw new ApiException("请选择要修改的记录");
+        boolean any = StringUtils.hasText(u.getDataSource()) || StringUtils.hasText(u.getReporter())
+                || StringUtils.hasText(u.getRemark());
+        if (!any) throw new ApiException("请至少填写一个要统一修改的字段");
+        // 逐行走 updateById(带 @Version) 而非一条 UpdateWrapper SQL, 以保留乐观锁校验; 版本冲突/已被删除的行跳过, 不计入返回数
+        int n = 0;
+        for (Long id : ids) {
+            PlantingRecord old = mapper.selectById(id);
+            if (old == null) continue;
+            PlantingRecord patch = new PlantingRecord();
+            patch.setId(id);
+            patch.setVersion(old.getVersion());
+            if (StringUtils.hasText(u.getDataSource())) patch.setDataSource(u.getDataSource());
+            if (StringUtils.hasText(u.getReporter())) patch.setReporter(u.getReporter());
+            if (StringUtils.hasText(u.getRemark())) patch.setRemark(u.getRemark());
+            n += mapper.updateById(patch);
+        }
+        return n;
+    }
+
+    /** 批量软删除: 必填原因(与单条删除规则一致, 无需管理员) */
+    @Transactional
+    public int batchDelete(java.util.List<Long> ids, String reason) {
+        if (ids == null || ids.isEmpty()) throw new ApiException("请选择要删除的记录");
+        if (!StringUtils.hasText(reason)) throw new ApiException("请填写删除原因");
+        com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<PlantingRecord> w =
+                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<PlantingRecord>().in("id", ids);
+        w.set("delete_reason", reason).set("deleted_by", UserContext.username()).set("deleted_at", LocalDateTime.now());
+        mapper.update(null, w);
+        int n = mapper.deleteBatchIds(ids);
+        for (Long id : ids) auditLogService.record("planting", id, "DELETE", "批量软删除, 原因: " + reason);
+        return n;
     }
 
     // ---------------- 校验 ----------------

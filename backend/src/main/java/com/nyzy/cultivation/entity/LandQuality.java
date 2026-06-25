@@ -40,4 +40,7 @@ public class LandQuality {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    @Version
+    private Integer version;
 }

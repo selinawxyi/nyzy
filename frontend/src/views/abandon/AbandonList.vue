@@ -21,15 +21,16 @@
         />
         <el-button type="primary" :icon="Search" @click="onSearch">搜索</el-button>
         <el-button :icon="Download" @click="onExport">导出 Excel</el-button>
-        <el-button :icon="DataAnalysis" @click="onStats">统计分析</el-button>
+        <el-button :icon="DataAnalysis" @click="openStats">统计分析</el-button>
         <el-button :icon="Download" @click="onExportTask">治理台账</el-button>
+        <el-button :disabled="!selected.length" type="warning" plain @click="openBatchTask">批量下发任务{{ selected.length ? `(${selected.length})` : '' }}</el-button>
         <div class="flex-spacer" />
         <el-button type="primary" :icon="Plus" @click="openForm()">新增上报</el-button>
       </div>
     </el-card>
 
     <el-card shadow="never" class="table-card">
-      <el-table :data="rows" v-loading="loading" stripe>
+      <el-table :data="rows" v-loading="loading" stripe @selection-change="onSelect">
         <el-table-column type="selection" width="46" />
         <el-table-column prop="parcelCode" label="地块编码" width="120" />
         <el-table-column label="地块名称" min-width="150">
@@ -183,6 +184,36 @@
       </template>
     </el-dialog>
 
+    <!-- 批量下发治理任务 -->
+    <el-dialog v-model="batchTaskVisible" title="批量下发治理任务" width="560px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
+        :title="`将对选中的 ${selected.length} 个「未治理」地块统一下发任务模板, 各地块生成独立任务`" />
+      <el-form ref="batchTaskRef" :model="batchTaskForm" :rules="batchTaskRules" label-width="110px">
+        <el-form-item label="任务名称">
+          <el-input v-model="batchTaskForm.name" placeholder="留空则按各地块名称自动生成" />
+        </el-form-item>
+        <el-form-item label="责任单位" prop="respUnit">
+          <el-input v-model="batchTaskForm.respUnit" placeholder="如 太平镇人民政府" />
+        </el-form-item>
+        <el-form-item label="责任人" prop="respPerson">
+          <el-input v-model="batchTaskForm.respPerson" />
+        </el-form-item>
+        <el-form-item label="治理面积目标">
+          <el-input-number v-model="batchTaskForm.targetArea" :min="0" :precision="2" style="width:100%" placeholder="留空则按各地块撂荒面积" />
+        </el-form-item>
+        <el-form-item label="治理标准">
+          <el-input v-model="batchTaskForm.standard" placeholder="如 恢复耕种, 种植一季粮食作物" />
+        </el-form-item>
+        <el-form-item label="完成时限">
+          <el-date-picker v-model="batchTaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchTaskVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitBatchTask">批量下发</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 治理验收 -->
     <el-dialog v-model="acceptVisible" title="治理任务验收" width="480px">
       <el-form :model="acceptForm" label-width="110px">
@@ -241,17 +272,6 @@
           <span v-if="!nextStatuses(detail.parcel.governStatus).length" class="muted">（无可流转状态）</span>
         </div>
 
-        <el-divider content-position="left">撂荒原因填报</el-divider>
-        <el-empty v-if="!detail.reasons?.length" description="暂无原因填报" :image-size="60" />
-        <div v-for="r in detail.reasons" :key="r.id" class="sub-item">
-          <div><b>{{ (r.reasonTypes || '').split(',').map(x => reasonDict[x] || x).join('、') }}</b></div>
-          <div class="muted">{{ r.detail }}</div>
-          <div class="muted">建议：{{ r.suggestion }}</div>
-        </div>
-
-        <el-divider content-position="left">现场照片 / 附件</el-divider>
-        <AttachmentPanel biz-type="abandon" :biz-id="detail.parcel.id" />
-
         <el-divider content-position="left">治理任务</el-divider>
         <el-empty v-if="!detail.tasks?.length" description="暂无治理任务" :image-size="60" />
         <div v-for="t in detail.tasks" :key="t.id" class="sub-item">
@@ -271,17 +291,68 @@
             <el-button link type="success" size="small" @click="openAccept(t)">验收</el-button>
           </div>
         </div>
+
+        <el-divider content-position="left">撂荒原因填报</el-divider>
+        <el-empty v-if="!detail.reasons?.length" description="暂无原因填报" :image-size="60" />
+        <div v-for="r in detail.reasons" :key="r.id" class="sub-item">
+          <div><b>{{ (r.reasonTypes || '').split(',').map(x => reasonDict[x] || x).join('、') }}</b></div>
+          <div class="muted">{{ r.detail }}</div>
+          <div class="muted">建议：{{ r.suggestion }}</div>
+        </div>
+
+        <el-divider content-position="left">现场照片 / 附件</el-divider>
+        <AttachmentPanel biz-type="abandon" :biz-id="detail.parcel.id" />
       </template>
     </el-drawer>
+
+    <!-- 统计分析: 撂荒模块自身维度(治理状态/原因/区域/年度趋势), 当前筛选条件(年份)同步生效 -->
+    <el-dialog v-model="statsVisible" title="撂荒统计分析" width="860px" @opened="loadStats">
+      <div v-loading="statsLoading">
+        <div class="stat-row">
+          <el-card shadow="never" class="stat-card"><div class="stat-val">{{ stats.totalCount ?? '-' }}</div><div class="stat-label">撂荒地块数</div></el-card>
+          <el-card shadow="never" class="stat-card"><div class="stat-val">{{ stats.totalArea ?? '-' }}</div><div class="stat-label">撂荒总面积(亩)</div></el-card>
+        </div>
+        <el-row :gutter="12" style="margin-top:12px">
+          <el-col :span="12">
+            <el-card shadow="never">
+              <template #header><span class="card-title">治理状态分布</span></template>
+              <EChart v-if="statusPie.series" :option="statusPie" height="270px" />
+            </el-card>
+          </el-col>
+          <el-col :span="12">
+            <el-card shadow="never">
+              <template #header><span class="card-title">撂荒原因分布</span></template>
+              <EChart v-if="reasonBar.series" :option="reasonBar" height="240px" />
+            </el-card>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12" style="margin-top:12px">
+          <el-col :span="12">
+            <el-card shadow="never">
+              <template #header><span class="card-title">区域分布(按村, 前8)</span></template>
+              <EChart v-if="regionBar.series" :option="regionBar" height="240px" />
+            </el-card>
+          </el-col>
+          <el-col :span="12">
+            <el-card shadow="never">
+              <template #header><span class="card-title">年度新增趋势</span></template>
+              <EChart v-if="yearLine.series" :option="yearLine" height="240px" />
+            </el-card>
+          </el-col>
+        </el-row>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Download, DataAnalysis, Plus } from '@element-plus/icons-vue'
 import { abandonApi, exportApi } from '../../api'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
+import EChart from '../../components/EChart.vue'
 import {
   governStatusDict, governStatusOptions, sourceDict, sourceOptions,
   degreeDict, degreeOptions, reasonDict, reasonOptions, taskStatusDict, cropOptions
@@ -327,8 +398,69 @@ const onExport = () => exportApi.abandon({
   governStatus: query.governStatus || undefined,
   abandonYear: query.abandonYear || undefined
 })
-const onStats = () => ElMessage.info('统计分析：见「分析」菜单的种植动态分析')
 const onExportTask = () => exportApi.abandonTask({})
+
+// ---- 统计分析(撂荒模块自身维度: 治理状态/原因/区域/年度趋势) ----
+const statsVisible = ref(false)
+const statsLoading = ref(false)
+const stats = reactive({ totalCount: null, totalArea: null, byStatus: [], byReason: [], byRegion: [], byYear: [] })
+const openStats = () => { statsVisible.value = true }
+const loadStats = async () => {
+  statsLoading.value = true
+  try {
+    const d = await abandonApi.stats(query.abandonYear || undefined)
+    Object.assign(stats, d)
+  } finally {
+    statsLoading.value = false
+  }
+}
+const statusPie = computed(() => {
+  if (!stats.byStatus.length) return {}
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}: {c}块 ({d}%)' },
+    legend: { bottom: 0, itemWidth: 12, itemHeight: 12 },
+    series: [{
+      type: 'pie', radius: ['32%', '58%'], center: ['50%', '42%'],
+      data: stats.byStatus.map((s) => ({ name: govStatus(s.key).label, value: s.count })),
+      label: { formatter: '{b}\n{d}%', fontSize: 11 },
+      labelLine: { length: 8, length2: 6 },
+      // 占比相近的小扇区挨在一起时标签容易叠字, 自动检测重叠并隐藏被挡住的那个(留legend兜底可读)
+      labelLayout: { hideOverlap: true }
+    }]
+  }
+})
+const reasonBar = computed(() => {
+  if (!stats.byReason.length) return {}
+  const data = [...stats.byReason].sort((a, b) => b.count - a.count)
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 110, right: 20, top: 10, bottom: 30 },
+    xAxis: { type: 'value', name: '块' },
+    yAxis: { type: 'category', data: data.map((d) => reasonDict[d.key] || '未填写').reverse() },
+    series: [{ type: 'bar', data: data.map((d) => d.count).reverse(), itemStyle: { color: '#f56c6c' }, barWidth: '55%' }]
+  }
+})
+const regionBar = computed(() => {
+  if (!stats.byRegion.length) return {}
+  const data = [...stats.byRegion]
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 90, right: 20, top: 10, bottom: 30 },
+    xAxis: { type: 'value', name: '块' },
+    yAxis: { type: 'category', data: data.map((d) => d.key).reverse() },
+    series: [{ type: 'bar', data: data.map((d) => d.count).reverse(), itemStyle: { color: '#e6a23c' }, barWidth: '55%' }]
+  }
+})
+const yearLine = computed(() => {
+  if (!stats.byYear.length) return {}
+  return {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 20, top: 10, bottom: 30 },
+    xAxis: { type: 'category', data: stats.byYear.map((d) => `${d.year}年`) },
+    yAxis: { type: 'value', name: '块' },
+    series: [{ type: 'line', smooth: true, data: stats.byYear.map((d) => d.count), itemStyle: { color: '#2e9e5b' }, lineStyle: { color: '#2e9e5b' } }]
+  }
+})
 
 // ---- 新增/编辑 ----
 const formVisible = ref(false)
@@ -421,6 +553,44 @@ const submitTask = () => {
   })
 }
 
+// ---- 批量下发治理任务 ----
+const selected = ref([])
+const onSelect = (rows) => { selected.value = rows }
+const batchTaskVisible = ref(false)
+const batchTaskRef = ref()
+const batchTaskForm = reactive({ name: '', respUnit: '', respPerson: '', targetArea: null, standard: '', deadline: '' })
+const batchTaskRules = {
+  respUnit: [{ required: true, message: '请输入责任单位', trigger: 'blur' }],
+  respPerson: [{ required: true, message: '请输入责任人', trigger: 'blur' }]
+}
+const openBatchTask = () => {
+  const invalid = selected.value.filter((r) => r.governStatus !== 'UNGOVERNED')
+  if (invalid.length) {
+    ElMessage.error(`仅"未治理"状态的地块可下发任务，请取消勾选：${invalid.map((r) => r.parcelName).join('、')}`)
+    return
+  }
+  Object.assign(batchTaskForm, { name: '', respUnit: '', respPerson: '', targetArea: null, standard: '恢复耕种, 种植一季粮食作物', deadline: '' })
+  batchTaskVisible.value = true
+}
+const submitBatchTask = () => {
+  batchTaskRef.value.validate(async (valid) => {
+    if (!valid) return
+    saving.value = true
+    try {
+      const ids = await abandonApi.batchCreateTasks(selected.value.map((r) => r.id), {
+        name: batchTaskForm.name || null, respUnit: batchTaskForm.respUnit, respPerson: batchTaskForm.respPerson,
+        targetArea: batchTaskForm.targetArea || null, standard: batchTaskForm.standard, deadline: batchTaskForm.deadline || null
+      })
+      ElMessage.success(`已下发 ${ids.length} 个治理任务`)
+      batchTaskVisible.value = false
+      selected.value = []
+      load()
+    } finally {
+      saving.value = false
+    }
+  })
+}
+
 // ---- 详情 ----
 const detailVisible = ref(false)
 const detail = reactive({ parcel: null, reasons: [], tasks: [] })
@@ -494,7 +664,11 @@ const submitAccept = async () => {
   }
 }
 
-onMounted(load)
+const route = useRoute()
+onMounted(() => {
+  if (route.query.keyword) query.keyword = String(route.query.keyword)
+  load()
+})
 </script>
 
 <style scoped>
@@ -509,4 +683,10 @@ onMounted(load)
 .sub-item { padding: 10px 0; border-bottom: 1px dashed #ebeef5; font-size: 13px; }
 .task-ops { margin-top: 6px; }
 .muted { color: #909399; font-size: 12px; margin-top: 2px; }
+.stat-row { display: flex; gap: 12px; }
+.stat-card { flex: 1; text-align: center; }
+.stat-card :deep(.el-card__body) { padding: 16px; }
+.stat-val { font-size: 26px; font-weight: 700; color: #2e9e5b; }
+.stat-label { font-size: 13px; color: #909399; margin-top: 4px; }
+.card-title { font-weight: 600; color: #1f2d3d; }
 </style>

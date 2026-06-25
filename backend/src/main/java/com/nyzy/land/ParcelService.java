@@ -1,6 +1,7 @@
 package com.nyzy.land;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -102,9 +103,42 @@ public class ParcelService {
         p.setDeletedBy(null);
         p.setDeletedAt(null);
         p.setCreatedAt(null);
-        mapper.updateById(p);
+        if (mapper.updateById(p) == 0) {
+            throw new ApiException(409, "数据已被他人修改, 请刷新后重试");
+        }
         LandParcel latest = mapper.selectById(p.getId());
         recordHistory(latest, "UPDATE", fields, StringUtils.hasText(reason) ? reason : "信息更新");
+        cascadeDenormalized(old, latest);
+    }
+
+    /**
+     * 地块编码/名称/区划属于种植记录/质量评价/撂荒记录里冗余存储的展示字段(按 parcel_code 关联, 非外键),
+     * 这里改了源头后同步回写, 避免那几张表继续显示改名/改区划前的旧信息.
+     */
+    private void cascadeDenormalized(LandParcel old, LandParcel n) {
+        boolean codeChanged = changed(old.getParcelCode(), n.getParcelCode());
+        boolean nameChanged = changed(old.getName(), n.getName());
+        boolean regionChanged = changed(old.getRegionId(), n.getRegionId()) || changed(old.getRegionPath(), n.getRegionPath());
+        if (!codeChanged && !nameChanged && !regionChanged) return;
+        String oldCode = old.getParcelCode();
+
+        UpdateWrapper<PlantingRecord> pw = new UpdateWrapper<PlantingRecord>().eq("parcel_code", oldCode);
+        if (codeChanged) pw.set("parcel_code", n.getParcelCode());
+        if (nameChanged) pw.set("parcel_name", n.getName());
+        if (regionChanged) pw.set("region_id", n.getRegionId()).set("region_path", n.getRegionPath());
+        plantingMapper.update(null, pw);
+
+        UpdateWrapper<LandQuality> qw = new UpdateWrapper<LandQuality>().eq("parcel_code", oldCode);
+        if (codeChanged) qw.set("parcel_code", n.getParcelCode());
+        if (nameChanged) qw.set("parcel_name", n.getName());
+        if (regionChanged) qw.set("region_id", n.getRegionId()).set("region_path", n.getRegionPath());
+        qualityMapper.update(null, qw);
+
+        UpdateWrapper<AbandonParcel> aw = new UpdateWrapper<AbandonParcel>().eq("parcel_code", oldCode);
+        if (codeChanged) aw.set("parcel_code", n.getParcelCode());
+        if (nameChanged) aw.set("parcel_name", n.getName());
+        if (regionChanged) aw.set("region_id", n.getRegionId()).set("region_path", n.getRegionPath());
+        abandonMapper.update(null, aw);
     }
 
     /**
@@ -148,6 +182,165 @@ public class ParcelService {
         mapper.updateById(upd);
         LandParcel latest = mapper.selectById(old.getId());
         recordHistory(latest, "UPDATE", diffFields(old, patch), "批量导入更新");
+    }
+
+    /**
+     * 空间框选批量改属性 (A1.2): 对查询命中的多个地块统一修改承包方/用途字段(仅非空字段).
+     * 承包方编码/地块用途属于关键字段, 与单条编辑(update)同样的规则需要填写变更原因.
+     * 逐行走 updateById(带 @Version) 以保留乐观锁校验, 并逐行记录历史(与该模块版本追溯设计一致).
+     */
+    @Transactional
+    public int batchUpdate(List<Long> ids, LandParcel patch, String reason) {
+        if (ids == null || ids.isEmpty()) throw new ApiException("请选择要修改的地块");
+        boolean any = StringUtils.hasText(patch.getContractorName()) || StringUtils.hasText(patch.getContractorCode())
+                || StringUtils.hasText(patch.getLandUse());
+        if (!any) throw new ApiException("请至少填写一个要统一修改的字段");
+        boolean keyChanged = StringUtils.hasText(patch.getContractorCode()) || StringUtils.hasText(patch.getLandUse());
+        if (keyChanged && !StringUtils.hasText(reason)) {
+            throw new ApiException("批量修改承包方编码或地块用途属于关键变更, 请填写变更原因");
+        }
+        int n = 0;
+        for (Long id : ids) {
+            LandParcel old = mapper.selectById(id);
+            if (old == null) continue;
+            LandParcel upd = new LandParcel();
+            upd.setId(id);
+            upd.setVersion(old.getVersion());
+            if (StringUtils.hasText(patch.getContractorName())) upd.setContractorName(patch.getContractorName());
+            if (StringUtils.hasText(patch.getContractorCode())) upd.setContractorCode(patch.getContractorCode());
+            if (StringUtils.hasText(patch.getLandUse())) upd.setLandUse(patch.getLandUse());
+            if (mapper.updateById(upd) == 0) continue;
+            LandParcel latest = mapper.selectById(id);
+            recordHistory(latest, "UPDATE", diffFields(old, patch), StringUtils.hasText(reason) ? reason : "空间框选批量修改");
+            n++;
+        }
+        return n;
+    }
+
+    // ---------------- 几何编辑 (A1.4) ----------------
+
+    /** 边界节点编辑/重绘: 重算面积/质心/四至, 记历史. */
+    @Transactional
+    public void updateGeometry(Long id, String boundaryGeoJson, String reason) {
+        if (!StringUtils.hasText(reason)) throw new ApiException("请填写编辑原因");
+        get(id);
+        org.locationtech.jts.geom.Polygon poly = com.nyzy.gis.GeoUtil.parsePolygon(boundaryGeoJson);
+        com.nyzy.gis.GeoUtil.validateOrThrow(poly);
+        applyGeometry(id, poly);
+        LandParcel latest = mapper.selectById(id);
+        recordHistory(latest, "UPDATE", "地块边界编辑", reason);
+    }
+
+    /**
+     * 用一条贯穿线把地块分割成两块: 面积较大的一块保留原编码并更新几何,
+     * 较小的一块以 newCode 新建一条地块, 两者都继承原承包方/用途/区划信息并记历史.
+     */
+    @Transactional
+    public Long split(Long id, String lineGeoJson, String newCode, String reason) {
+        if (!StringUtils.hasText(reason)) throw new ApiException("请填写分割原因");
+        if (!StringUtils.hasText(newCode)) throw new ApiException("请填写分割后新地块编码");
+        if (exists(newCode, null)) throw new ApiException("地块编码已存在: " + newCode);
+        LandParcel old = get(id);
+        if (!StringUtils.hasText(old.getBoundary())) throw new ApiException("该地块没有边界几何, 无法分割");
+
+        org.locationtech.jts.geom.Polygon original = com.nyzy.gis.GeoUtil.parsePolygon(old.getBoundary());
+        org.locationtech.jts.geom.LineString line = com.nyzy.gis.GeoUtil.parseLineString(lineGeoJson);
+        List<org.locationtech.jts.geom.Polygon> parts = com.nyzy.gis.GeoUtil.splitByLine(original, line);
+        parts.sort((a, b) -> Double.compare(b.getArea(), a.getArea())); // 大块在前, 保留原编码
+        org.locationtech.jts.geom.Polygon keep = parts.get(0);
+        org.locationtech.jts.geom.Polygon spun = parts.get(1);
+
+        applyGeometry(id, keep);
+        LandParcel kept = mapper.selectById(id);
+        recordHistory(kept, "UPDATE", "地块分割", reason + "(分出新地块 " + newCode + ")");
+
+        LandParcel created = new LandParcel();
+        created.setParcelCode(newCode);
+        created.setName(old.getName() + "(分割)");
+        created.setRegionId(old.getRegionId());
+        created.setRegionPath(old.getRegionPath());
+        created.setContractorName(old.getContractorName());
+        created.setContractorCode(old.getContractorCode());
+        created.setLandUse(old.getLandUse());
+        created.setContractStart(old.getContractStart());
+        created.setContractEnd(old.getContractEnd());
+        created.setDeleted(0);
+        created.setMergeStatus("NORMAL");
+        fillGeometryFields(created, spun);
+        mapper.insert(created);
+        recordHistory(created, "CREATE", "地块分割产生", reason + "(由 " + old.getParcelCode() + " 分割产生)");
+        return created.getId();
+    }
+
+    /**
+     * 合并多个(相邻/相交)地块为一个新地块; 原地块不删除, 标记 merge_status=MERGED
+     * 并记录合并去向, 历史/种植/质量记录仍可按原编码追溯。
+     */
+    @Transactional
+    public Long merge(List<Long> ids, String newCode, String reason) {
+        if (!StringUtils.hasText(reason)) throw new ApiException("请填写合并原因");
+        if (!StringUtils.hasText(newCode)) throw new ApiException("请填写合并后新地块编码");
+        if (ids == null || ids.size() < 2) throw new ApiException("请至少选择2个地块进行合并");
+        if (exists(newCode, null)) throw new ApiException("地块编码已存在: " + newCode);
+
+        List<LandParcel> parcels = mapper.selectBatchIds(ids);
+        if (parcels.size() != ids.size()) throw new ApiException("部分地块不存在");
+        for (LandParcel p : parcels) {
+            if (!StringUtils.hasText(p.getBoundary())) throw new ApiException("地块 " + p.getParcelCode() + " 没有边界几何, 无法合并");
+            if ("MERGED".equals(p.getMergeStatus())) throw new ApiException("地块 " + p.getParcelCode() + " 已合并入其他地块, 不能再次合并");
+        }
+        List<org.locationtech.jts.geom.Polygon> polys = new ArrayList<>();
+        for (LandParcel p : parcels) polys.add(com.nyzy.gis.GeoUtil.parsePolygon(p.getBoundary()));
+        org.locationtech.jts.geom.Polygon merged = com.nyzy.gis.GeoUtil.unionToSinglePolygon(polys);
+
+        LandParcel base = parcels.stream().max(Comparator.comparing(p -> p.getArea() == null ? java.math.BigDecimal.ZERO : p.getArea())).get();
+        LandParcel created = new LandParcel();
+        created.setParcelCode(newCode);
+        created.setName(base.getName() + "(合并)");
+        created.setRegionId(base.getRegionId());
+        created.setRegionPath(base.getRegionPath());
+        created.setContractorName(base.getContractorName());
+        created.setContractorCode(base.getContractorCode());
+        created.setLandUse(base.getLandUse());
+        created.setContractStart(base.getContractStart());
+        created.setContractEnd(base.getContractEnd());
+        created.setDeleted(0);
+        created.setMergeStatus("NORMAL");
+        fillGeometryFields(created, merged);
+        mapper.insert(created);
+        String sourceCodes = String.join("、", parcels.stream().map(LandParcel::getParcelCode).toArray(String[]::new));
+        recordHistory(created, "CREATE", "地块合并产生", reason + "(由 " + sourceCodes + " 合并产生)");
+
+        for (LandParcel p : parcels) {
+            LandParcel upd = new LandParcel();
+            upd.setId(p.getId());
+            upd.setMergeStatus("MERGED");
+            upd.setMergedIntoCode(newCode);
+            mapper.updateById(upd);
+            LandParcel latest = mapper.selectById(p.getId());
+            recordHistory(latest, "UPDATE", "地块合并", reason + "(合并入新地块 " + newCode + ")");
+        }
+        return created.getId();
+    }
+
+    private void applyGeometry(Long id, org.locationtech.jts.geom.Polygon poly) {
+        LandParcel upd = new LandParcel();
+        upd.setId(id);
+        fillGeometryFields(upd, poly);
+        mapper.updateById(upd);
+    }
+
+    private void fillGeometryFields(LandParcel p, org.locationtech.jts.geom.Polygon poly) {
+        p.setArea(java.math.BigDecimal.valueOf(com.nyzy.gis.GeoUtil.areaMu(poly)).setScale(2, java.math.RoundingMode.HALF_UP));
+        double[] centroid = com.nyzy.gis.GeoUtil.centroid(poly);
+        p.setCenterLng(java.math.BigDecimal.valueOf(centroid[0]));
+        p.setCenterLat(java.math.BigDecimal.valueOf(centroid[1]));
+        String[] bounds = com.nyzy.gis.GeoUtil.bounds(poly);
+        p.setBoundEast(bounds[0]);
+        p.setBoundSouth(bounds[1]);
+        p.setBoundWest(bounds[2]);
+        p.setBoundNorth(bounds[3]);
+        p.setBoundary(com.nyzy.gis.GeoUtil.toGeoJson(poly));
     }
 
     // ---------------- 版本历史 (A1.5) ----------------

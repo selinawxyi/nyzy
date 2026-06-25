@@ -16,6 +16,7 @@ const routes = [
       { path: 'support', name: 'support', component: () => import('../views/resource/SupportList.vue'), meta: { title: '配套设施', nav: 'facility' } },
       { path: 'facility-category', name: 'facilityCategory', component: () => import('../views/resource/CategoryManage.vue'), meta: { title: '设施分类', nav: 'facility' } },
       { path: 'analysis', name: 'analysis', component: () => import('../views/analysis/AnalysisDashboard.vue'), meta: { title: '种植动态分析', nav: 'analysis' } },
+      { path: 'spatial-query', name: 'spatialQuery', component: () => import('../views/map/SpatialQuery.vue'), meta: { title: '数字化地图服务(空间范围查询)', nav: 'analysis' } },
       { path: 'recycle', name: 'recycle', component: () => import('../views/system/RecycleBin.vue'), meta: { title: '回收站', nav: 'user' } },
       { path: 'users', name: 'users', component: () => import('../views/system/UserManage.vue'), meta: { title: '用户管理', nav: 'user' } },
       { path: 'audit-center', name: 'auditCenter', component: () => import('../views/system/AuditCenter.vue'), meta: { title: '待审核中心', nav: 'user' } },

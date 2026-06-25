@@ -14,10 +14,10 @@ import com.nyzy.abandon.mapper.AbandonTaskMapper;
 import com.nyzy.auth.UserContext;
 import com.nyzy.common.ApiException;
 import com.nyzy.common.PageResult;
+import com.nyzy.common.RegionPathUtil;
 import com.nyzy.cultivation.entity.PlantingRecord;
 import com.nyzy.cultivation.mapper.PlantingRecordMapper;
-import com.nyzy.system.entity.AuditLog;
-import com.nyzy.system.mapper.AuditLogMapper;
+import com.nyzy.system.AuditLogService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -27,6 +27,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class AbandonService {
@@ -49,19 +50,19 @@ public class AbandonService {
     private final AbandonParcelMapper parcelMapper;
     private final AbandonReasonMapper reasonMapper;
     private final AbandonTaskMapper taskMapper;
-    private final AuditLogMapper auditLogMapper;
+    private final AuditLogService auditLogService;
     private final PlantingRecordMapper plantingMapper;
     private final com.nyzy.auth.DataScope dataScope;
     private final com.nyzy.notification.NotificationService notificationService;
 
     public AbandonService(AbandonParcelMapper parcelMapper, AbandonReasonMapper reasonMapper,
-                          AbandonTaskMapper taskMapper, AuditLogMapper auditLogMapper,
+                          AbandonTaskMapper taskMapper, AuditLogService auditLogService,
                           PlantingRecordMapper plantingMapper, com.nyzy.auth.DataScope dataScope,
                           com.nyzy.notification.NotificationService notificationService) {
         this.parcelMapper = parcelMapper;
         this.reasonMapper = reasonMapper;
         this.taskMapper = taskMapper;
-        this.auditLogMapper = auditLogMapper;
+        this.auditLogService = auditLogService;
         this.plantingMapper = plantingMapper;
         this.dataScope = dataScope;
         this.notificationService = notificationService;
@@ -86,6 +87,64 @@ public class AbandonService {
         return new PageResult<>(p.getTotal(), p.getRecords());
     }
 
+    /**
+     * 撂荒模块自身的统计分析: 治理状态分布 / 原因分布 / 年度新增趋势 / 区域(村)分布,
+     * 都是该模块特有的维度, 不与「分析」菜单下的种植动态分析(在耕/撂荒二分类)重复。
+     */
+    public Map<String, Object> stats(Integer year) {
+        QueryWrapper<AbandonParcel> w = new QueryWrapper<>();
+        if (year != null) w.eq("abandon_year", year);
+        dataScope.apply(w, "region_id");
+        List<AbandonParcel> all = parcelMapper.selectList(w);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalCount", all.size());
+        result.put("totalArea", sumArea(all));
+        result.put("byStatus", groupBy(all, AbandonParcel::getGovernStatus, false));
+        result.put("byReason", groupBy(all, a -> a.getReasonType() == null ? "OTHER" : a.getReasonType(), false));
+        result.put("byRegion", groupBy(all, a -> RegionPathUtil.village(a.getRegionPath()), true));
+        result.put("byYear", yearTrend(all));
+        return result;
+    }
+
+    private BigDecimal sumArea(List<AbandonParcel> list) {
+        return list.stream().map(AbandonParcel::getArea).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private List<Map<String, Object>> groupBy(List<AbandonParcel> list,
+                                              java.util.function.Function<AbandonParcel, String> keyFn,
+                                              boolean topRegionOnly) {
+        Map<String, List<AbandonParcel>> grouped = list.stream()
+                .collect(Collectors.groupingBy(keyFn));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<String, List<AbandonParcel>> e : grouped.entrySet()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("key", e.getKey());
+            m.put("count", e.getValue().size());
+            m.put("area", sumArea(e.getValue()));
+            out.add(m);
+        }
+        out.sort((a, b) -> Integer.compare((Integer) b.get("count"), (Integer) a.get("count")));
+        if (topRegionOnly && out.size() > 8) return out.subList(0, 8);
+        return out;
+    }
+
+    private List<Map<String, Object>> yearTrend(List<AbandonParcel> list) {
+        Map<Integer, List<AbandonParcel>> grouped = list.stream()
+                .filter(a -> a.getAbandonYear() != null)
+                .collect(Collectors.groupingBy(AbandonParcel::getAbandonYear));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Integer y : new TreeSet<>(grouped.keySet())) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("year", y);
+            m.put("count", grouped.get(y).size());
+            m.put("area", sumArea(grouped.get(y)));
+            out.add(m);
+        }
+        return out;
+    }
+
     public AbandonDetail detail(Long id) {
         AbandonParcel parcel = parcelMapper.selectById(id);
         if (parcel == null) throw new ApiException(404, "撂荒地块不存在");
@@ -106,6 +165,12 @@ public class AbandonService {
         if (!StringUtils.hasText(p.getParcelCode())) throw new ApiException("地块编码不能为空");
         if (!StringUtils.hasText(p.getGovernStatus())) p.setGovernStatus("UNGOVERNED");
         if (!VALID_STATUS.contains(p.getGovernStatus())) throw new ApiException("非法治理状态");
+        long activeCount = parcelMapper.selectCount(new QueryWrapper<AbandonParcel>()
+                .eq("parcel_code", p.getParcelCode())
+                .notIn("govern_status", Arrays.asList("GOVERNED", "REJECTED")));
+        if (activeCount > 0) {
+            throw new ApiException("该地块已有一条进行中的撂荒记录, 请勿重复上报(如信息有误请编辑原记录)");
+        }
         if (p.getFoundDate() == null) p.setFoundDate(LocalDate.now());
         p.setCreatedBy(UserContext.username());
         p.setDeleted(0);
@@ -135,7 +200,9 @@ public class AbandonService {
         p.setDeletedBy(null);
         p.setCreatedBy(null);
         p.setCreatedAt(null);
-        parcelMapper.updateById(p);
+        if (parcelMapper.updateById(p) == 0) {
+            throw new ApiException(409, "数据已被他人修改, 请刷新后重试");
+        }
         audit("abandon", p.getId(), "UPDATE", "修改撂荒地块");
     }
 
@@ -218,6 +285,35 @@ public class AbandonService {
                     "abandon", parcel.getId());
         }
         return t.getId();
+    }
+
+    /** 批量下发治理任务: 对多个"未治理"地块套用同一模板(责任单位/人/标准/时限), 各自生成独立任务 */
+    @Transactional
+    public List<Long> batchCreateTasks(List<Long> abandonIds, AbandonTask template) {
+        if (abandonIds == null || abandonIds.isEmpty()) throw new ApiException("请选择要下发任务的地块");
+        if (!StringUtils.hasText(template.getRespUnit())) throw new ApiException("请填写责任单位");
+        if (!StringUtils.hasText(template.getRespPerson())) throw new ApiException("请填写责任人");
+        List<AbandonParcel> parcels = new ArrayList<>();
+        for (Long id : abandonIds) {
+            AbandonParcel parcel = require(id);
+            if (!"UNGOVERNED".equals(parcel.getGovernStatus())) {
+                throw new ApiException(parcel.getParcelName() + " 当前状态非「未治理」, 无法下发任务");
+            }
+            parcels.add(parcel);
+        }
+        List<Long> taskIds = new ArrayList<>();
+        for (AbandonParcel parcel : parcels) {
+            AbandonTask t = new AbandonTask();
+            t.setAbandonId(parcel.getId());
+            t.setName(StringUtils.hasText(template.getName()) ? template.getName() : parcel.getParcelName() + "撂荒地治理任务");
+            t.setRespUnit(template.getRespUnit());
+            t.setRespPerson(template.getRespPerson());
+            t.setTargetArea(template.getTargetArea() != null ? template.getTargetArea() : parcel.getArea());
+            t.setStandard(template.getStandard());
+            t.setDeadline(template.getDeadline());
+            taskIds.add(createTask(t));
+        }
+        return taskIds;
     }
 
     /** 任务列表 (治理台账, 可按状态过滤) */
@@ -353,12 +449,6 @@ public class AbandonService {
     }
 
     private void audit(String bizType, Long bizId, String action, String detail) {
-        AuditLog log = new AuditLog();
-        log.setBizType(bizType);
-        log.setBizId(String.valueOf(bizId));
-        log.setAction(action);
-        log.setOperator(UserContext.username());
-        log.setDetail(detail);
-        auditLogMapper.insert(log);
+        auditLogService.record(bizType, bizId, action, detail);
     }
 }

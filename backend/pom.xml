@@ -67,6 +67,13 @@
             <version>3.3.4</version>
         </dependency>
 
+        <!-- GIS 几何计算(校验/面积/质心/空间关系/合并/分割) -->
+        <dependency>
+            <groupId>org.locationtech.jts</groupId>
+            <artifactId>jts-core</artifactId>
+            <version>1.19.0</version>
+        </dependency>
+
         <!-- JWT -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

@@ -40,4 +40,7 @@ public class AbandonParcel {
     private String createdBy;
     private LocalDateTime createdAt;  // DB default CURRENT_TIMESTAMP
     private LocalDateTime updatedAt;
+
+    @Version
+    private Integer version;
 }

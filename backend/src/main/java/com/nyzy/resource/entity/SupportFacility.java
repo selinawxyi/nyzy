@@ -20,6 +20,9 @@ public class SupportFacility {
     private BigDecimal lng;
     private BigDecimal lat;
     private String serviceRange;
+    private String serviceArea;          // 服务范围面(GeoJSON Polygon)
+    private Integer coverageCount;       // 服务范围覆盖地块数(自动统计)
+    private Integer coverageVillageCount; // 服务范围覆盖村庄数(自动统计)
     private String serviceAbility;
     private String operateStatus;    // 正常/停业/建设中
     private String operateSubject;   // 企业/合作社/个体户
@@ -39,4 +42,7 @@ public class SupportFacility {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    @Version
+    private Integer version;
 }

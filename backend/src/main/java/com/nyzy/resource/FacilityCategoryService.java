@@ -66,6 +66,17 @@ public class FacilityCategoryService {
     /** 删除: 有子分类或有关联设施则阻止 */
     @Transactional
     public void delete(Long id) {
+        deleteInternal(id, null);
+    }
+
+    /** 转移该分类下全部设施到目标分类后再删除 (一步完成, 文档要求的"批量转移后删") */
+    @Transactional
+    public void deleteWithTransfer(Long id, Long transferToId) {
+        if (transferToId == null) throw new ApiException("请选择转移目标分类");
+        deleteInternal(id, transferToId);
+    }
+
+    private void deleteInternal(Long id, Long transferToId) {
         require(id);
         long children = mapper.selectCount(new QueryWrapper<FacilityCategory>().eq("parent_id", id));
         if (children > 0) {
@@ -74,7 +85,19 @@ public class FacilityCategoryService {
         long facilities = supportMapper.selectCount(
                 new QueryWrapper<SupportFacility>().eq("category_id", id));
         if (facilities > 0) {
-            throw new ApiException("该分类下已有 " + facilities + " 个设施, 请先转移或删除这些设施后再删除分类");
+            if (transferToId == null) {
+                throw new ApiException("该分类下已有 " + facilities + " 个设施, 请先转移或删除这些设施后再删除分类");
+            }
+            if (transferToId.equals(id)) throw new ApiException("转移目标不能是自身分类");
+            FacilityCategory target = mapper.selectById(transferToId);
+            if (target == null) throw new ApiException("目标分类不存在");
+            if (target.getParentId() == null || target.getParentId() == 0) {
+                throw new ApiException("只能转移到二级分类(叶子分类)");
+            }
+            com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SupportFacility> w =
+                    new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SupportFacility>()
+                            .eq("category_id", id).set("category_id", transferToId);
+            supportMapper.update(null, w);
         }
         mapper.deleteById(id);
     }

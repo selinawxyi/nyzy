@@ -5,9 +5,13 @@ import com.nyzy.abandon.entity.AbandonParcel;
 import com.nyzy.abandon.mapper.AbandonParcelMapper;
 import com.nyzy.cultivation.entity.LandQuality;
 import com.nyzy.cultivation.entity.PlantingRecord;
+import com.nyzy.common.RegionPathUtil;
 import com.nyzy.cultivation.mapper.LandQualityMapper;
 import com.nyzy.cultivation.mapper.PlantingRecordMapper;
+import com.nyzy.land.entity.LandParcel;
+import com.nyzy.land.mapper.LandParcelMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -21,15 +25,21 @@ import java.util.stream.Collectors;
 @Service
 public class AnalysisService {
 
+    /** 确权地块用途里属于"农业耕种用地"的取值; 不在此集合里的(且非空)视为已转为非农用途 */
+    private static final Set<String> FARM_LAND_USE = new HashSet<>(
+            Arrays.asList("基本农田", "一般耕地", "设施农用地", "园地"));
+
     private final PlantingRecordMapper plantingMapper;
     private final AbandonParcelMapper abandonMapper;
     private final LandQualityMapper qualityMapper;
+    private final LandParcelMapper parcelMapper;
 
     public AnalysisService(PlantingRecordMapper plantingMapper, AbandonParcelMapper abandonMapper,
-                           LandQualityMapper qualityMapper) {
+                           LandQualityMapper qualityMapper, LandParcelMapper parcelMapper) {
         this.plantingMapper = plantingMapper;
         this.abandonMapper = abandonMapper;
         this.qualityMapper = qualityMapper;
+        this.parcelMapper = parcelMapper;
     }
 
     private List<PlantingRecord> validRecords(Integer year) {
@@ -112,7 +122,7 @@ public class AnalysisService {
     public List<Map<String, Object>> byRegion(Integer year) {
         List<PlantingRecord> list = validRecords(year);
         Map<String, List<PlantingRecord>> byVillage = list.stream()
-                .collect(Collectors.groupingBy(r -> village(r.getRegionPath())));
+                .collect(Collectors.groupingBy(r -> RegionPathUtil.village(r.getRegionPath())));
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map.Entry<String, List<PlantingRecord>> e : byVillage.entrySet()) {
@@ -131,18 +141,33 @@ public class AnalysisService {
         return result;
     }
 
-    /** E1.5 耕地利用类型: 在耕 / 撂荒 (季节性闲置/非农化暂按0, 需更多数据源) */
+    /**
+     * E1.5 耕地利用类型: 在耕(有效种植) / 撂荒(进行中的撂荒记录) / 非农化(地块用途已转为非农业耕种类型) /
+     * 季节性闲置(确权地块里, 既不在耕也未登记撂荒、也未转为非农用途的剩余部分, 按差值估算).
+     */
     public List<Map<String, Object>> landUse(Integer year) {
-        long planted = validRecords(year).stream()
-                .map(PlantingRecord::getParcelCode).distinct().count();
-        long abandoned = abandonMapper.selectCount(new QueryWrapper<AbandonParcel>()
-                .ne("govern_status", "GOVERNED")
-                .ne("govern_status", "REJECTED"));
+        Set<String> planted = validRecords(year).stream()
+                .map(PlantingRecord::getParcelCode).collect(Collectors.toSet());
+        Set<String> abandoned = abandonMapper.selectList(new QueryWrapper<AbandonParcel>()
+                        .ne("govern_status", "GOVERNED").ne("govern_status", "REJECTED"))
+                .stream().map(AbandonParcel::getParcelCode).collect(Collectors.toSet());
+
+        List<LandParcel> parcels = parcelMapper.selectList(
+                new QueryWrapper<LandParcel>().ne("merge_status", "MERGED"));
+        long nonFarm = 0, idle = 0;
+        for (LandParcel p : parcels) {
+            if (StringUtils.hasText(p.getLandUse()) && !FARM_LAND_USE.contains(p.getLandUse())) {
+                nonFarm++;
+                continue;
+            }
+            if (!planted.contains(p.getParcelCode()) && !abandoned.contains(p.getParcelCode())) idle++;
+        }
+
         List<Map<String, Object>> result = new ArrayList<>();
-        result.add(landUseItem("在耕", planted));
-        result.add(landUseItem("撂荒", abandoned));
-        result.add(landUseItem("季节性闲置", 0));
-        result.add(landUseItem("非农化", 0));
+        result.add(landUseItem("在耕", planted.size()));
+        result.add(landUseItem("撂荒", abandoned.size()));
+        result.add(landUseItem("季节性闲置", idle));
+        result.add(landUseItem("非农化", nonFarm));
         return result;
     }
 
@@ -203,7 +228,7 @@ public class AnalysisService {
     public Map<String, Object> regionCompare(Integer year) {
         List<PlantingRecord> list = validRecords(year);
         Map<String, List<PlantingRecord>> byVillage = list.stream()
-                .collect(Collectors.groupingBy(r -> village(r.getRegionPath())));
+                .collect(Collectors.groupingBy(r -> RegionPathUtil.village(r.getRegionPath())));
         Set<String> crops = list.stream().map(PlantingRecord::getCrop)
                 .collect(Collectors.toCollection(TreeSet::new));
         List<String> regions = new ArrayList<>(byVillage.keySet());
@@ -237,7 +262,7 @@ public class AnalysisService {
                 .filter(r -> crop == null || crop.equals(r.getCrop()))
                 .collect(Collectors.toList());
         Map<String, List<PlantingRecord>> byVillage = list.stream()
-                .collect(Collectors.groupingBy(r -> village(r.getRegionPath())));
+                .collect(Collectors.groupingBy(r -> RegionPathUtil.village(r.getRegionPath())));
 
         // 各村平均地力等级 (1最好), 用于质量得分
         Map<String, Double> gradeByVillage = avgGradeByVillage();
@@ -300,7 +325,7 @@ public class AnalysisService {
         Map<String, List<Integer>> byV = new HashMap<>();
         for (LandQuality q : qs) {
             if (q.getGrade() == null) continue;
-            byV.computeIfAbsent(village(q.getRegionPath()), k -> new ArrayList<>()).add(q.getGrade());
+            byV.computeIfAbsent(RegionPathUtil.village(q.getRegionPath()), k -> new ArrayList<>()).add(q.getGrade());
         }
         Map<String, Double> avg = new HashMap<>();
         byV.forEach((k, v) -> avg.put(k, v.stream().mapToInt(Integer::intValue).average().orElse(0)));
@@ -373,14 +398,6 @@ public class AnalysisService {
         m.put("type", type);
         m.put("count", count);
         return m;
-    }
-
-    private String village(String regionPath) {
-        if (regionPath == null) return "未知";
-        String[] parts = regionPath.split("/");
-        // 省/州/市/乡镇/村/组 -> 取「村」(index 4), 不足则取末段
-        if (parts.length >= 5) return parts[4];
-        return parts[parts.length - 1];
     }
 
     private double toDouble(BigDecimal v) {

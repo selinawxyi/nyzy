@@ -9,6 +9,7 @@ import com.nyzy.common.PageResult;
 import com.nyzy.resource.dto.WaterQuery;
 import com.nyzy.resource.entity.WaterFacility;
 import com.nyzy.resource.mapper.WaterFacilityMapper;
+import com.nyzy.system.AuditLogService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -22,10 +23,13 @@ public class WaterFacilityService {
 
     private final WaterFacilityMapper mapper;
     private final com.nyzy.auth.DataScope dataScope;
+    private final AuditLogService auditLogService;
 
-    public WaterFacilityService(WaterFacilityMapper mapper, com.nyzy.auth.DataScope dataScope) {
+    public WaterFacilityService(WaterFacilityMapper mapper, com.nyzy.auth.DataScope dataScope,
+                                AuditLogService auditLogService) {
         this.mapper = mapper;
         this.dataScope = dataScope;
+        this.auditLogService = auditLogService;
     }
 
     public PageResult<WaterFacility> page(WaterQuery q) {
@@ -57,6 +61,7 @@ public class WaterFacilityService {
         f.setCreatedBy(UserContext.username());
         f.setDeleted(0);
         mapper.insert(f);
+        auditLogService.record("water", f.getId(), "CREATE", "新增水利设施 " + f.getName());
         return f.getId();
     }
 
@@ -75,7 +80,10 @@ public class WaterFacilityService {
         f.setDeletedAt(null);
         f.setCreatedBy(null);
         f.setCreatedAt(null);
-        mapper.updateById(f);
+        if (mapper.updateById(f) == 0) {
+            throw new ApiException(409, "数据已被他人修改, 请刷新后重试");
+        }
+        auditLogService.record("water", f.getId(), "UPDATE", "修改水利设施" + (keyChanged ? "(关键字段变更, 转待审核)" : ""));
     }
 
     /** 审核: 通过 / 退回 */
@@ -89,22 +97,31 @@ public class WaterFacilityService {
         upd.setId(id);
         upd.setAuditStatus(pass ? "APPROVED" : "REJECTED");
         mapper.updateById(upd);
+        auditLogService.record("water", id, "STATUS", pass ? "审核通过" : "审核退回");
     }
 
     /** 批量修改: 对选中设施统一改运行状态/责任人/电话(仅非空字段) */
     @Transactional
     public int batchUpdate(java.util.List<Long> ids, WaterFacility u) {
         if (ids == null || ids.isEmpty()) throw new ApiException("请选择要修改的设施");
-        com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<WaterFacility> w =
-                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<>();
-        w.in("id", ids);
-        boolean any = false;
-        if (StringUtils.hasText(u.getRunStatus())) { w.set("run_status", u.getRunStatus()); any = true; }
-        if (StringUtils.hasText(u.getManager())) { w.set("manager", u.getManager()); any = true; }
-        if (StringUtils.hasText(u.getPhone())) { w.set("phone", u.getPhone()); any = true; }
-        if (u.getLastMaintainDate() != null) { w.set("last_maintain_date", u.getLastMaintainDate()); any = true; }
+        boolean any = StringUtils.hasText(u.getRunStatus()) || StringUtils.hasText(u.getManager())
+                || StringUtils.hasText(u.getPhone()) || u.getLastMaintainDate() != null;
         if (!any) throw new ApiException("请至少填写一个要统一修改的字段");
-        return mapper.update(null, w);
+        // 逐行走 updateById(带 @Version) 而非一条 UpdateWrapper SQL, 以保留乐观锁校验; 版本冲突/已被删除的行跳过, 不计入返回数
+        int n = 0;
+        for (Long id : ids) {
+            WaterFacility old = mapper.selectById(id);
+            if (old == null) continue;
+            WaterFacility patch = new WaterFacility();
+            patch.setId(id);
+            patch.setVersion(old.getVersion());
+            if (StringUtils.hasText(u.getRunStatus())) patch.setRunStatus(u.getRunStatus());
+            if (StringUtils.hasText(u.getManager())) patch.setManager(u.getManager());
+            if (StringUtils.hasText(u.getPhone())) patch.setPhone(u.getPhone());
+            if (u.getLastMaintainDate() != null) patch.setLastMaintainDate(u.getLastMaintainDate());
+            n += mapper.updateById(patch);
+        }
+        return n;
     }
 
     /** 删除: 仅管理员, 必填原因, 软删除入回收站 */
@@ -120,6 +137,22 @@ public class WaterFacilityService {
         meta.setDeletedAt(LocalDateTime.now());
         mapper.updateById(meta);
         mapper.deleteById(id);
+        auditLogService.record("water", id, "DELETE", "软删除, 原因: " + reason);
+    }
+
+    /** 批量删除: 仅管理员, 必填原因, 软删除入回收站(与单条删除规则一致) */
+    @Transactional
+    public int batchDelete(java.util.List<Long> ids, String reason) {
+        if (!UserContext.isAdmin()) throw new ApiException(403, "仅管理员可删除水利设施");
+        if (ids == null || ids.isEmpty()) throw new ApiException("请选择要删除的设施");
+        if (!StringUtils.hasText(reason)) throw new ApiException("请填写删除原因");
+        com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<WaterFacility> w =
+                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<WaterFacility>().in("id", ids);
+        w.set("delete_reason", reason).set("deleted_by", UserContext.username()).set("deleted_at", LocalDateTime.now());
+        mapper.update(null, w);
+        int n = mapper.deleteBatchIds(ids);
+        for (Long id : ids) auditLogService.record("water", id, "DELETE", "批量软删除, 原因: " + reason);
+        return n;
     }
 
     private void validate(WaterFacility f) {

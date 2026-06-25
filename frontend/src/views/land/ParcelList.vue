@@ -13,13 +13,17 @@
         <el-button :icon="Download" @click="onExport">导出 Excel</el-button>
         <ImportButton type="parcel" template-name="确权地块导入模板.xlsx" @done="load" />
         <ImportButton type="parcel-update" template-name="确权地块批量更新模板.xlsx" @done="load" />
+        <GisImportButton type="parcel-shapefile" accept=".zip" label="导入Shapefile" @done="load" />
+        <GisImportButton type="parcel-kml" accept=".kml" label="导入KML" @done="load" />
         <div class="flex-spacer" />
+        <el-button type="warning" :disabled="selectedRows.length < 2" @click="openMerge">合并所选（{{ selectedRows.length }}）</el-button>
         <el-button type="primary" :icon="Plus" @click="openForm()">新增地块</el-button>
       </div>
     </el-card>
 
     <el-card shadow="never" class="table-card">
-      <el-table :data="rows" v-loading="loading" stripe>
+      <el-table :data="rows" v-loading="loading" stripe @selection-change="(v) => selectedRows = v">
+        <el-table-column type="selection" width="40" />
         <el-table-column prop="parcelCode" label="地块编码" width="120" />
         <el-table-column label="地块名称" min-width="150">
           <template #default="{ row }"><el-link type="primary" @click="openDetail(row)">{{ row.name }}</el-link></template>
@@ -89,6 +93,28 @@
             东至{{ detail.boundEast || '-' }}，南至{{ detail.boundSouth || '-' }}，西至{{ detail.boundWest || '-' }}，北至{{ detail.boundNorth || '-' }}
           </el-descriptions-item>
         </el-descriptions>
+
+        <el-divider content-position="left">
+          地块边界 / 几何编辑
+          <el-button link type="primary" size="small" :disabled="!detail.boundary" @click="toggleGeoMode('edit-polygon')">
+            {{ geoMode === 'edit-polygon' ? '取消编辑' : '编辑边界' }}
+          </el-button>
+          <el-button link type="warning" size="small" :disabled="!detail.boundary" @click="toggleGeoMode('line')">
+            {{ geoMode === 'line' ? '取消分割' : '分割地块' }}
+          </el-button>
+        </el-divider>
+        <el-empty v-if="!detail.boundary" description="该地块没有边界几何，无法编辑/分割" :image-size="50" />
+        <template v-else>
+          <div v-if="geoMode === 'edit-polygon' && liveStats" class="live-stats">
+            当前面积 <b>{{ liveStats.area.toFixed(2) }}</b> 亩
+            （原 {{ origStats.area.toFixed(2) }} 亩，<span :class="{ diff: areaChangePct > 10 }">{{ areaChangePct > 0 ? '+' : '' }}{{ areaChangePct.toFixed(1) }}%</span>）
+            · 周长 {{ liveStats.perimeter.toFixed(0) }} 米 · 节点数 {{ liveStats.nodeCount }}
+          </div>
+          <MapView :draw-mode="geoMode" :edit-feature="geoEditFeature"
+                   :polygon-groups="geoMode ? [] : [{ key: 'cur', name: '当前边界', color: '#409eff', features: [{ boundary: detail.boundary }] }]"
+                   height="320px" @edit-saved="onGeoEditSaved" @edit-progress="onGeoEditProgress"
+                   @draw-created="onGeoDrawCreated" @exit-draw="exitGeoMode" />
+        </template>
 
         <el-divider content-position="left">
           地块标注
@@ -179,17 +205,46 @@
         <el-button type="primary" @click="submitAnno">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 分割: 填新地块编码 + 原因 -->
+    <el-dialog v-model="splitVisible" title="确认分割" width="420px">
+      <el-form label-width="100px">
+        <el-form-item label="分出新地块编码"><el-input v-model="splitForm.newCode" placeholder="如 JY-T001-2" /></el-form-item>
+        <el-form-item label="分割原因"><el-input v-model="splitForm.reason" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="splitVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitSplit">确定分割</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 合并所选地块 -->
+    <el-dialog v-model="mergeVisible" title="合并所选地块" width="420px">
+      <el-text type="info" size="small">将合并 {{ selectedRows.map(r => r.parcelCode).join('、') }}</el-text>
+      <el-form label-width="100px" style="margin-top:10px">
+        <el-form-item label="合并后新编码"><el-input v-model="mergeForm.newCode" placeholder="如 JY-MERGED-1" /></el-form-item>
+        <el-form-item label="合并原因"><el-input v-model="mergeForm.reason" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="mergeVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitMerge">确定合并</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Download } from '@element-plus/icons-vue'
 import { parcelApi, exportApi } from '../../api'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
 import RegionCascader from '../../components/RegionCascader.vue'
 import ImportButton from '../../components/ImportButton.vue'
+import GisImportButton from '../../components/GisImportButton.vue'
+import MapView from '../../components/MapView.vue'
+import { polygonAreaMu, polygonPerimeterMeters } from '../../utils/geoMath'
 
 const landUseOptions = ['基本农田', '一般耕地', '设施农用地', '园地']
 const colorMap = { red: '#f56c6c', yellow: '#e6a23c', green: '#67c23a', blue: '#409eff' }
@@ -284,6 +339,23 @@ const onDelete = async (row) => {
   } catch (e) { /* cancel */ }
 }
 
+// ---- 合并所选地块 ----
+const selectedRows = ref([])
+const mergeVisible = ref(false)
+const mergeForm = reactive({ newCode: '', reason: '' })
+const openMerge = () => {
+  Object.assign(mergeForm, { newCode: '', reason: '' })
+  mergeVisible.value = true
+}
+const submitMerge = async () => {
+  if (!mergeForm.newCode || !mergeForm.reason) { ElMessage.error('请填写新编码和合并原因'); return }
+  await parcelApi.merge(selectedRows.value.map((r) => r.id), mergeForm.newCode, mergeForm.reason)
+  ElMessage.success('合并成功')
+  mergeVisible.value = false
+  selectedRows.value = []
+  load()
+}
+
 // ---- 详情 / 历史 / 标注 ----
 const detailVisible = ref(false)
 const detail = ref(null)
@@ -291,11 +363,76 @@ const history = ref([])
 const annotations = ref([])
 const openDetail = async (row) => {
   compareSel.value = []
+  geoMode.value = null
   detail.value = await parcelApi.get(row.id)
   ;[history.value, annotations.value] = await Promise.all([
     parcelApi.history(row.id), parcelApi.annotations(row.id)
   ])
   detailVisible.value = true
+}
+
+// ---- 几何编辑(边界编辑 / 分割) ----
+const geoMode = ref(null) // null | 'edit-polygon' | 'line'
+const geoEditFeature = ref(null)
+const origStats = reactive({ area: 0, perimeter: 0 })
+const liveStats = ref(null)
+const areaChangePct = computed(() => {
+  if (!liveStats.value || !origStats.area) return 0
+  return ((liveStats.value.area - origStats.area) / origStats.area) * 100
+})
+const exitGeoMode = () => { geoMode.value = null; geoEditFeature.value = null; liveStats.value = null }
+const toggleGeoMode = (mode) => {
+  if (geoMode.value === mode) { exitGeoMode(); return }
+  geoMode.value = mode
+  if (mode === 'edit-polygon') {
+    try {
+      const geo = JSON.parse(detail.value.boundary)
+      geoEditFeature.value = geo
+      const ring = geo.coordinates[0]
+      origStats.area = polygonAreaMu(ring)
+      origStats.perimeter = polygonPerimeterMeters(ring)
+      liveStats.value = { area: origStats.area, perimeter: origStats.perimeter, nodeCount: ring.length - 1 }
+    } catch (e) { geoEditFeature.value = null }
+  }
+}
+const onGeoEditProgress = (points) => {
+  liveStats.value = {
+    area: polygonAreaMu(points),
+    perimeter: polygonPerimeterMeters(points),
+    nodeCount: points.length
+  }
+}
+const onGeoEditSaved = async (geojson) => {
+  try {
+    const { value: reason } = await ElMessageBox.prompt('请填写边界编辑原因：', '编辑确认',
+      { confirmButtonText: '提交', cancelButtonText: '取消', inputType: 'textarea',
+        inputValidator: (v) => (v && v.trim() ? true : '原因不能为空') })
+    await parcelApi.updateGeometry(detail.value.id, JSON.stringify(geojson), reason)
+    ElMessage.success('边界已更新')
+    geoMode.value = null
+    detail.value = await parcelApi.get(detail.value.id)
+    history.value = await parcelApi.history(detail.value.id)
+    load()
+  } catch (e) { /* cancel */ }
+}
+const splitVisible = ref(false)
+const splitForm = reactive({ newCode: '', reason: '', line: null })
+const onGeoDrawCreated = (shape) => {
+  if (shape.type !== 'line') return
+  splitForm.line = JSON.stringify({ type: 'LineString', coordinates: shape.points })
+  splitForm.newCode = ''
+  splitForm.reason = ''
+  splitVisible.value = true
+}
+const submitSplit = async () => {
+  if (!splitForm.newCode || !splitForm.reason) { ElMessage.error('请填写新编码和分割原因'); return }
+  await parcelApi.split(detail.value.id, splitForm.line, splitForm.newCode, splitForm.reason)
+  ElMessage.success('分割成功')
+  splitVisible.value = false
+  geoMode.value = null
+  detail.value = await parcelApi.get(detail.value.id)
+  history.value = await parcelApi.history(detail.value.id)
+  load()
 }
 
 // ---- 版本对比 ----
@@ -343,7 +480,11 @@ const removeAnno = async (a) => {
   annotations.value = await parcelApi.annotations(detail.value.id)
 }
 
-onMounted(load)
+const route = useRoute()
+onMounted(() => {
+  if (route.query.keyword) query.keyword = String(route.query.keyword)
+  load()
+})
 </script>
 
 <style scoped>
@@ -360,4 +501,5 @@ onMounted(load)
 .anno-body { flex: 1; font-size: 13px; }
 .anno-tags { margin-top: 4px; }
 .diff { color: #f56c6c; font-weight: 600; }
+.live-stats { font-size: 13px; color: #606266; background: #fdf6ec; padding: 6px 10px; border-radius: 4px; margin: 6px 0; }
 </style>

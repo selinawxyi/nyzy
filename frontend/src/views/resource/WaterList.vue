@@ -16,6 +16,7 @@
         <el-button :icon="Download" @click="onExport">导出 Excel</el-button>
         <ImportButton type="water" template-name="水利设施导入模板.xlsx" @done="load" />
         <el-button :disabled="!selected.length" @click="openBatch">批量修改{{ selected.length ? `(${selected.length})` : '' }}</el-button>
+        <el-button :disabled="!selected.length" type="danger" plain @click="onBatchDelete">批量删除{{ selected.length ? `(${selected.length})` : '' }}</el-button>
         <div class="flex-spacer" />
         <el-button type="primary" :icon="Plus" @click="openForm()">标注水利设施</el-button>
       </div>
@@ -105,6 +106,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Download } from '@element-plus/icons-vue'
 import { waterApi, exportApi } from '../../api'
@@ -112,6 +114,7 @@ import RegionCascader from '../../components/RegionCascader.vue'
 import ImportButton from '../../components/ImportButton.vue'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
 import { waterTypeOptions, runStatusDict, runStatusOptions, auditStatusDict } from '../../constants/dict'
+import { confirmBatchUpdate } from '../../utils/batchPreview'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -149,13 +152,20 @@ const openBatch = () => {
   Object.assign(batchForm, { runStatus: '', manager: '', phone: '', lastMaintainDate: '' })
   batchVisible.value = true
 }
+const batchFieldLabels = { runStatus: '运行状态', manager: '管护责任人', phone: '联系电话', lastMaintainDate: '最近维护' }
 const submitBatch = async () => {
+  const updates = {
+    runStatus: batchForm.runStatus || null, manager: batchForm.manager || null,
+    phone: batchForm.phone || null, lastMaintainDate: batchForm.lastMaintainDate || null
+  }
+  try {
+    await confirmBatchUpdate(selected.value.length, updates, batchFieldLabels)
+  } catch (e) {
+    if (e?.message) ElMessage.error(e.message) // 未填写任何字段; 用户主动取消则 e 为 'cancel' 字符串
+    return
+  }
   saving.value = true
   try {
-    const updates = {
-      runStatus: batchForm.runStatus || null, manager: batchForm.manager || null,
-      phone: batchForm.phone || null, lastMaintainDate: batchForm.lastMaintainDate || null
-    }
     const n = await waterApi.batch(selected.value.map((r) => r.id), updates)
     ElMessage.success(`已修改 ${n} 个设施`)
     batchVisible.value = false
@@ -219,8 +229,25 @@ const onDelete = async (row) => {
     load()
   } catch (e) { /* cancel */ }
 }
+const onBatchDelete = async () => {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将把选中的 ${selected.value.length} 个设施一并删除并进入回收站（保留90天），请填写删除原因：`, '批量删除确认',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', inputType: 'textarea', type: 'warning',
+        inputPlaceholder: '如：设施已拆除 / 数据重复录入 / 位置信息错误',
+        inputValidator: (v) => (v && v.trim() ? true : '删除原因不能为空') })
+    const n = await waterApi.batchDelete(selected.value.map((r) => r.id), value)
+    ElMessage.success(`已删除 ${n} 个设施`)
+    selected.value = []
+    load()
+  } catch (e) { /* cancel */ }
+}
 
-onMounted(load)
+const route = useRoute()
+onMounted(() => {
+  if (route.query.keyword) query.keyword = String(route.query.keyword)
+  load()
+})
 </script>
 
 <style scoped>

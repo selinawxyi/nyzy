@@ -5,6 +5,7 @@ import com.nyzy.common.ApiException;
 import com.nyzy.cultivation.entity.LandQuality;
 import com.nyzy.cultivation.mapper.LandQualityMapper;
 import com.nyzy.land.mapper.LandParcelMapper;
+import com.nyzy.system.AuditLogService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -18,7 +19,8 @@ class QualityServiceTest {
     private final LandQualityMapper mapper = Mockito.mock(LandQualityMapper.class);
     private final LandParcelMapper parcelMapper = Mockito.mock(LandParcelMapper.class);
     private final com.nyzy.auth.DataScope dataScope = Mockito.mock(com.nyzy.auth.DataScope.class);
-    private final QualityService service = new QualityService(mapper, parcelMapper, dataScope);
+    private final AuditLogService auditLogService = Mockito.mock(AuditLogService.class);
+    private final QualityService service = new QualityService(mapper, parcelMapper, dataScope, auditLogService);
 
     @AfterEach
     void tearDown() {
@@ -70,6 +72,32 @@ class QualityServiceTest {
         ApiException ex = assertThrows(ApiException.class,
                 () -> service.batchUpdate(java.util.Arrays.asList(1L), u));
         assertTrue(ex.getMessage().contains("1-10"));
+    }
+
+    @Test
+    void batch_success_updatesEachRowWithVersion() {
+        LandQuality old1 = q(3); old1.setId(1L); old1.setVersion(2);
+        LandQuality old2 = q(3); old2.setId(2L); old2.setVersion(5);
+        Mockito.when(mapper.selectById(1L)).thenReturn(old1);
+        Mockito.when(mapper.selectById(2L)).thenReturn(old2);
+        Mockito.when(mapper.updateById(Mockito.any())).thenReturn(1);
+        LandQuality u = new LandQuality();
+        u.setSoilType("黑土");
+        int n = service.batchUpdate(java.util.Arrays.asList(1L, 2L), u);
+        assertEquals(2, n);
+        Mockito.verify(mapper, Mockito.times(2)).updateById(Mockito.any());
+    }
+
+    @Test
+    void batch_versionConflict_rowSkippedNotCountedOrThrown() {
+        LandQuality old1 = q(3); old1.setId(1L); old1.setVersion(2);
+        Mockito.when(mapper.selectById(1L)).thenReturn(old1);
+        Mockito.when(mapper.selectById(2L)).thenReturn(null); // 已被删除/不存在
+        Mockito.when(mapper.updateById(Mockito.any())).thenReturn(0); // 版本冲突, 0行受影响
+        LandQuality u = new LandQuality();
+        u.setSoilType("黑土");
+        int n = assertDoesNotThrow(() -> service.batchUpdate(java.util.Arrays.asList(1L, 2L), u));
+        assertEquals(0, n);
     }
 
     @Test

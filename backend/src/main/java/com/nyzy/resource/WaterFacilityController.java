@@ -59,4 +59,14 @@ public class WaterFacilityController {
     public Result<Integer> batch(@RequestBody BatchRequest req) {
         return Result.ok(service.batchUpdate(req.ids, req.updates));
     }
+
+    public static class BatchDeleteRequest {
+        public java.util.List<Long> ids;
+        public String reason;
+    }
+
+    @PostMapping("/facilities/batch-delete")
+    public Result<Integer> batchDelete(@RequestBody BatchDeleteRequest req) {
+        return Result.ok(service.batchDelete(req.ids, req.reason));
+    }
 }

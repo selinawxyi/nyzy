@@ -27,6 +27,8 @@ public class LandParcel {
     private BigDecimal centerLng;
     private BigDecimal centerLat;
     private String boundary;          // GeoJSON
+    private String mergeStatus;       // NORMAL / MERGED(已合并入其他地块)
+    private String mergedIntoCode;    // 合并去向的新地块编码
     private LocalDate contractStart;
     private LocalDate contractEnd;
     private String remark;
@@ -40,4 +42,7 @@ public class LandParcel {
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    @Version
+    private Integer version;
 }
